@@ -4,11 +4,11 @@
 
 ## 支持环境
 
-- Ubuntu22.04/24.04及更新版本，或Debian12及更新版本，systemd、x86_64/ARM64、Python3.10+。
+- 已验收 TencentOS Server3.3（RHEL8兼容），同时支持Ubuntu22.04/24.04及更新版本、Debian12及更新版本；均需systemd和x86_64/ARM64。
 - 公网IP默认`119.45.210.141`。首次安装的80/443/8787不能被其他应用占用；遇到现有网站会停止，需先规划共存方案。服务端8787仅绑定127.0.0.1。
-- 腾讯云安全组及主机防火墙需允许80、443入站，SSH22按您原有管理规则保留。80用于证书验证和自动续期，不能在安装后关闭。
-- 服务器需正常访问Ubuntu/Debian镜像、`nodejs.org`、PyPI、Let's Encrypt ACME。安装器下载nginx、Node24.19.0及Certbot5.4+；Node安装包会校验官方SHA-256，不替换系统全局Node。
-- 未检查到远程操作系统前，请勿把TencentOS/CentOS当作Ubuntu执行；安装器会明确停止，不会强制改系统。
+- 腾讯云安全组需允许80、443入站。若firewalld正在运行，安装器仅新增`http`、`https`服务并保留SSH规则；8787不对公网开放。80用于证书验证和自动续期，不能在安装后关闭。
+- 服务器需正常访问其系统软件仓库、`nodejs.org`、PyPI、Let's Encrypt ACME。TencentOS使用官方Python3.11和nginx1.24模块流；系统Python3.6保持不变。Node24.19.0安装包会校验官方SHA-256。
+- 本次TencentOS验收主机的SELinux为Disabled。为避免绕过现有安全策略，若后续启用SELinux，安装器会停止并要求先补充专门策略，而不会自动关闭或放宽SELinux。
 
 ## 打包与安装
 
@@ -54,11 +54,11 @@ sudo bash deploy/install.sh
 sudo HUITONG_PUBLIC_IP=您的公网IPv4 bash deploy/install.sh
 ```
 
-安装器先核验清单、操作系统和端口，随后以低权限`huitong`系统账号运行网站。安装失败会恢复先前的应用软链接和本次替换的nginx/systemd配置；安装依赖、初始管理员配置和数据库备份会保留，便于排查重试。
+安装器先核验清单、操作系统和端口，随后以低权限`huitong`系统账号运行网站。安装失败会恢复先前的应用软链接、本次替换的nginx/systemd配置及本次新增的firewalld网站规则；安装依赖、初始管理员配置和数据库备份会保留，便于排查重试。
 
 ## HTTPS与证书
 
-账号Cookie要求HTTPS，PDF及文件哈希也依赖浏览器安全上下文。安装器使用Certbot5.4+的IP证书功能，向Let's Encrypt申请`shortlived`证书，验证失败就停止，不会关闭Secure Cookie或使用自签名证书掩盖问题。
+账号Cookie要求HTTPS，PDF及文件哈希也依赖浏览器安全上下文。安装器在独立Python环境中固定使用Certbot5.4.0的IP证书功能，向Let's Encrypt优先申请`shortlived`证书，验证失败就停止，不会关闭Secure Cookie或使用自签名证书掩盖问题。
 
 IP证书有效期较短，定时器每6小时检查续期并在成功后重新加载nginx。证书及ACME账户隔离在`/etc/huitong/letsencrypt`，不更改其他网站的证书配置。安装期间必须确保公网80可达。
 

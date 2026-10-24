@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
-# 汇通云服务器：安装本地解压后的预构建发布包。不改动现有 SSH 或防火墙规则。
+# 汇通云服务器：安装本地解压后的预构建发布包；不改动现有 SSH 规则。
+# firewalld 运行时仅放行网站所需的 HTTP/HTTPS，并在安装失败时撤销本次新增项。
 set -Eeuo pipefail
 umask 077
 export DEBIAN_FRONTEND=noninteractive
 APP_ROOT=/opt/huitong
 CONFIG_DIR=/etc/huitong
 NGINX_CONF=/etc/nginx/conf.d/huitong-cloud.conf
+ACME_WEBROOT=/var/lib/huitong-acme-webroot
 SERVICE=huitong-cloud.service
 NODE_VERSION=24.19.0
 PUBLIC_IP=${HUITONG_PUBLIC_IP:-119.45.210.141}
@@ -22,13 +24,18 @@ SERVICE_WAS_ENABLED=0
 APP_STOPPED=0
 TIMER_WAS_ACTIVE=0
 TIMER_WAS_ENABLED=0
+FIREWALL_ZONE=''
+FIREWALL_HTTP_RUNTIME_ADDED=0
+FIREWALL_HTTP_PERMANENT_ADDED=0
+FIREWALL_HTTPS_RUNTIME_ADDED=0
+FIREWALL_HTTPS_PERMANENT_ADDED=0
 FINISHED=0
 
 fail() { printf '部署中止：%s\n' "$*" >&2; exit 1; }
 log() { printf '%s\n' "$*"; }
 cleanup() {
     local result=$?
-    if (( result != 0 && FINISHED == 0 && (CONFIG_WRITTEN || UNIT_WRITTEN || TIMER_WRITTEN || SWITCHED || APP_STOPPED) )); then
+    if (( result != 0 && FINISHED == 0 && (CONFIG_WRITTEN || UNIT_WRITTEN || TIMER_WRITTEN || SWITCHED || APP_STOPPED || FIREWALL_HTTP_RUNTIME_ADDED || FIREWALL_HTTP_PERMANENT_ADDED || FIREWALL_HTTPS_RUNTIME_ADDED || FIREWALL_HTTPS_PERMANENT_ADDED) )); then
         printf '\n部署未完成，正在恢复本次替换前的应用与配置。\n' >&2
         set +e
         if (( SWITCHED )); then
@@ -60,6 +67,12 @@ cleanup() {
         if (( TIMER_WAS_ENABLED )); then systemctl enable huitong-cert-renew.timer >/dev/null 2>&1; fi
         if (( TIMER_WAS_ACTIVE )); then systemctl start huitong-cert-renew.timer >/dev/null 2>&1; fi
         if command -v nginx >/dev/null && nginx -t >/dev/null 2>&1; then systemctl reload nginx >/dev/null 2>&1; fi
+        if [[ -n "$FIREWALL_ZONE" ]] && command -v firewall-cmd >/dev/null; then
+            if (( FIREWALL_HTTP_RUNTIME_ADDED )); then firewall-cmd --zone="$FIREWALL_ZONE" --remove-service=http >/dev/null 2>&1; fi
+            if (( FIREWALL_HTTPS_RUNTIME_ADDED )); then firewall-cmd --zone="$FIREWALL_ZONE" --remove-service=https >/dev/null 2>&1; fi
+            if (( FIREWALL_HTTP_PERMANENT_ADDED )); then firewall-cmd --permanent --zone="$FIREWALL_ZONE" --remove-service=http >/dev/null 2>&1; fi
+            if (( FIREWALL_HTTPS_PERMANENT_ADDED )); then firewall-cmd --permanent --zone="$FIREWALL_ZONE" --remove-service=https >/dev/null 2>&1; fi
+        fi
         printf '安装日志见终端输出。软件包、初始账号配置及数据库备份保留，便于重试；未清空业务数据。\n' >&2
     fi
     [[ -z "$STAGE_DIR" ]] || rm -rf -- "$STAGE_DIR"
@@ -73,23 +86,29 @@ trap 'exit 130' INT TERM
 command -v flock >/dev/null || fail '缺少flock（util-linux）。'
 exec 9>/run/lock/huitong-install.lock
 flock -n 9 || fail '已有汇通云安装任务正在运行。'
-[[ -f /etc/os-release ]] || fail '无法识别操作系统。仅支持 Ubuntu 22.04+ / Debian 12+。'
+[[ -f /etc/os-release ]] || fail '无法识别操作系统。仅支持 TencentOS Server 3.3、Ubuntu 22.04+ 或 Debian 12+。'
 # shellcheck source=/dev/null
 . /etc/os-release
+OS_FAMILY=''
 case "${ID:-}" in
-    ubuntu) [[ ${VERSION_ID%%.*} -ge 22 ]] || fail 'Ubuntu 至少需要22.04。' ;;
-    debian) [[ ${VERSION_ID%%.*} -ge 12 ]] || fail 'Debian 至少需要12。' ;;
+    ubuntu) [[ ${VERSION_ID%%.*} -ge 22 ]] || fail 'Ubuntu 至少需要22.04。'; OS_FAMILY=debian ;;
+    debian) [[ ${VERSION_ID%%.*} -ge 12 ]] || fail 'Debian 至少需要12。'; OS_FAMILY=debian ;;
+    tencentos)
+        [[ ${VERSION_ID:-} =~ ^3\.([0-9]+) ]] && (( BASH_REMATCH[1] >= 3 )) || fail 'TencentOS Server 至少需要3.3。'
+        OS_FAMILY=tencentos
+        ;;
     *) fail "尚未验证此操作系统（${PRETTY_NAME:-unknown}）。请先提供系统版本，勿强制运行。" ;;
 esac
 [[ -d /run/systemd/system ]] || fail '此安装器需要 systemd，请在云服务器本机终端运行。'
 command -v python3 >/dev/null || fail '请先安装 python3，再运行安装器。'
+if [[ "$OS_FAMILY" == tencentos ]] && command -v getenforce >/dev/null && [[ $(getenforce) != Disabled ]]; then
+    fail '当前TencentOS部署已针对本服务器的SELinux禁用状态验收；检测到SELinux已启用，安装已停止以避免绕过安全策略。'
+fi
 python3 - "$PUBLIC_IP" "$BUNDLE_ROOT" <<'PY'
 import hashlib, ipaddress, json, os, pathlib, stat, sys
 ip = ipaddress.ip_address(sys.argv[1])
 if ip.version != 4 or not ip.is_global:
     raise SystemExit('必须配置公网 IPv4 地址。')
-if sys.version_info < (3,10):
-    raise SystemExit('需要 Python 3.10+。')
 root = pathlib.Path(sys.argv[2]).resolve()
 manifest_path=root/'RELEASE.json'
 manifest=json.loads(manifest_path.read_text())
@@ -121,7 +140,7 @@ for required in ['deploy/server.mjs','deploy/install.sh','frontend/worker/auth.j
 print('发布清单与全部文件 SHA-256 校验通过。')
 PY
 
-for path in "$APP_ROOT" "$CONFIG_DIR" /var/lib/huitong "$NGINX_CONF" "$CONFIG_DIR/huitong.env"; do
+for path in "$APP_ROOT" "$CONFIG_DIR" /var/lib/huitong "$NGINX_CONF" "$CONFIG_DIR/huitong.env" "$ACME_WEBROOT"; do
     [[ ! -L "$path" ]] || fail "拒绝使用符号链接目录：$path"
 done
 if [[ -e "$APP_ROOT" && ! -f "$APP_ROOT/.managed-by-huitong" ]]; then
@@ -130,11 +149,14 @@ fi
 if getent passwd huitong >/dev/null; then
     [[ -f "$APP_ROOT/.managed-by-huitong" ]] || fail '系统已有名为huitong的账号，且未找到本应用管理标记；请先核对。'
     IFS=: read -r _ _ app_uid app_gid _ app_home app_shell < <(getent passwd huitong)
-    [[ "$app_uid" -gt 0 && "$app_home" == /var/lib/huitong && "$app_shell" == /usr/sbin/nologin ]] || fail '现有huitong账号身份或目录异常。'
+    [[ "$app_uid" -gt 0 && "$app_home" == /var/lib/huitong && ( "$app_shell" == /usr/sbin/nologin || "$app_shell" == /sbin/nologin ) ]] || fail '现有huitong账号身份或目录异常。'
     [[ $(id -gn huitong) == huitong && $(id -G huitong) == "$app_gid" ]] || fail '现有huitong账号包含非预期的组权限。'
 fi
 if [[ -f "$CONFIG_DIR/huitong.env" && ! -f "$APP_ROOT/.managed-by-huitong" ]]; then
     fail '检测到既有凭据配置但缺少本应用管理标记，请先核对。'
+fi
+if [[ ! -f "$APP_ROOT/.managed-by-huitong" ]]; then
+    [[ ! -e "$ACME_WEBROOT" ]] || fail "$ACME_WEBROOT 已存在且不属于此安装器，请先核对。"
 fi
 for unit in huitong-cloud.service huitong-cert-renew.service huitong-cert-renew.timer; do
     unit_path="/etc/systemd/system/$unit"
@@ -166,8 +188,23 @@ if [[ ! -f "$CONFIG_DIR/huitong.env" && ! -r /dev/tty ]]; then
 fi
 
 log '检查完成，安装 nginx、证书工具及独立 Node.js24 运行环境。'
-apt-get update
-apt-get install -y --no-install-recommends nginx ca-certificates curl xz-utils python3-venv
+if [[ "$OS_FAMILY" == debian ]]; then
+    apt-get update
+    apt-get install -y --no-install-recommends nginx ca-certificates curl xz-utils python3-venv
+    CERTBOT_PYTHON=$(command -v python3)
+else
+    command -v dnf >/dev/null || fail 'TencentOS缺少dnf包管理器。'
+    PACKAGE_MANAGER=dnf
+    # TencentOS 3.3 的 nginx 使用模块流；仅在尚未安装 nginx 时选择官方1.24流。
+    if ! command -v nginx >/dev/null; then
+        "$PACKAGE_MANAGER" -y module install nginx:1.24/common
+    fi
+    "$PACKAGE_MANAGER" -y install ca-certificates curl xz python3.11 python3.11-pip
+    command -v nginx >/dev/null || fail 'TencentOS nginx模块安装完成后仍未找到nginx。'
+    [[ -x /usr/bin/python3.11 ]] || fail '已安装软件包，但未找到/usr/bin/python3.11；不会替换系统Python。'
+    CERTBOT_PYTHON=/usr/bin/python3.11
+fi
+"$CERTBOT_PYTHON" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)' || fail 'Certbot隔离环境需要Python3.10或更高版本。'
 install -d -m 755 "$APP_ROOT" "$APP_ROOT/releases" "$APP_ROOT/backups"
 touch "$APP_ROOT/.managed-by-huitong"
 install -d -m 700 "$CONFIG_DIR"
@@ -224,11 +261,20 @@ else
     grep -Fxq "PUBLIC_ORIGIN=https://$PUBLIC_IP" "$CONFIG_DIR/huitong.env" || fail '已有配置的PUBLIC_ORIGIN不同；请先手动核对，安装器未改写原账号配置。'
     log '保留现有管理员配置、用户及会话数据库。'
 fi
-getent passwd huitong >/dev/null || useradd --system --user-group --home-dir /var/lib/huitong --shell /usr/sbin/nologin huitong
+NOLOGIN_SHELL=$(command -v nologin || true)
+[[ -n "$NOLOGIN_SHELL" ]] || fail '系统缺少nologin安全Shell。'
+getent passwd huitong >/dev/null || useradd --system --user-group --home-dir /var/lib/huitong --shell "$NOLOGIN_SHELL" huitong
 install -d -m 700 -o huitong -g huitong /var/lib/huitong
-install -d -m 755 /var/lib/huitong-acme-webroot
-python3 -m venv "$APP_ROOT/certbot"
-"$APP_ROOT/certbot/bin/pip" --disable-pip-version-check install --upgrade 'certbot>=5.4,<6'
+install -d -m 755 "$ACME_WEBROOT"
+if [[ -x "$APP_ROOT/certbot/bin/python" ]] && "$APP_ROOT/certbot/bin/python" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3,10) else 1)' 2>/dev/null; then
+    : # 保留同一应用的可用隔离环境。
+else
+    if [[ -d "$APP_ROOT/certbot" ]]; then
+        mv "$APP_ROOT/certbot" "$APP_ROOT/backups/certbot-$(date -u +%Y%m%dT%H%M%S)"
+    fi
+    "$CERTBOT_PYTHON" -m venv "$APP_ROOT/certbot"
+fi
+"$APP_ROOT/certbot/bin/pip" --disable-pip-version-check install --upgrade 'certbot==5.4.0'
 
 release_id="$(date -u +%Y%m%dT%H%M%S)-$(sha256sum "$BUNDLE_ROOT/RELEASE.json" | cut -c1-12)"
 release_dir="$APP_ROOT/releases/$release_id"
@@ -246,10 +292,36 @@ if [[ ! -f "$CONFIG_DIR/letsencrypt/live/huitong-ip/fullchain.pem" ]]; then
     systemctl enable --now nginx
     systemctl reload nginx
 fi
+# firewalld只开放网站端口；8787始终仅监听回环地址。分别记录运行时和永久规则，失败时精确撤销本次新增项。
+if command -v firewall-cmd >/dev/null && systemctl is-active --quiet firewalld; then
+    FIREWALL_ZONE=$(firewall-cmd --get-default-zone)
+    default_interface=$(ip -o route show default 2>/dev/null | awk 'NR==1 { for (i=1; i<=NF; i++) if ($i=="dev") { print $(i+1); exit } }')
+    if [[ -n "$default_interface" ]]; then
+        interface_zone=$(firewall-cmd --get-zone-of-interface="$default_interface" 2>/dev/null || true)
+        if [[ -n "$interface_zone" && "$interface_zone" != 'no zone' ]]; then FIREWALL_ZONE=$interface_zone; fi
+    fi
+    [[ -n "$FIREWALL_ZONE" ]] || fail '无法确定firewalld默认区域。'
+    if ! firewall-cmd --zone="$FIREWALL_ZONE" --query-service=http >/dev/null; then
+        firewall-cmd --zone="$FIREWALL_ZONE" --add-service=http >/dev/null
+        FIREWALL_HTTP_RUNTIME_ADDED=1
+    fi
+    if ! firewall-cmd --permanent --zone="$FIREWALL_ZONE" --query-service=http >/dev/null; then
+        firewall-cmd --permanent --zone="$FIREWALL_ZONE" --add-service=http >/dev/null
+        FIREWALL_HTTP_PERMANENT_ADDED=1
+    fi
+    if ! firewall-cmd --zone="$FIREWALL_ZONE" --query-service=https >/dev/null; then
+        firewall-cmd --zone="$FIREWALL_ZONE" --add-service=https >/dev/null
+        FIREWALL_HTTPS_RUNTIME_ADDED=1
+    fi
+    if ! firewall-cmd --permanent --zone="$FIREWALL_ZONE" --query-service=https >/dev/null; then
+        firewall-cmd --permanent --zone="$FIREWALL_ZONE" --add-service=https >/dev/null
+        FIREWALL_HTTPS_PERMANENT_ADDED=1
+    fi
+fi
 log '核验或申请受信任的公网IP HTTPS证书。腾讯云安全组必须允许80/443入站。'
 "$APP_ROOT/certbot/bin/certbot" certonly --non-interactive --agree-tos --register-unsafely-without-email \
-    --webroot --webroot-path /var/lib/huitong-acme-webroot --ip-address "$PUBLIC_IP" \
-    --required-profile shortlived --cert-name huitong-ip --keep-until-expiring \
+    --webroot --webroot-path "$ACME_WEBROOT" --ip-address "$PUBLIC_IP" \
+    --preferred-profile shortlived --cert-name huitong-ip --keep-until-expiring \
     --config-dir "$CONFIG_DIR/letsencrypt" --work-dir /var/lib/huitong-acme --logs-dir /var/log/huitong-acme
 
 # 升级先暂停应用并备份SQLite及其WAL，保证备份的一致性；不删除旧版本。
