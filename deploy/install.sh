@@ -240,8 +240,8 @@ find "$release_dir" -type f -exec chmod 644 {} +
 
 # 隔离IP证书目录，避免改变服务器上其他证书的续期配置。
 if [[ ! -f "$CONFIG_DIR/letsencrypt/live/huitong-ip/fullchain.pem" ]]; then
-    sed "s/@@IP@@/$PUBLIC_IP/g" "$release_dir/deploy/nginx/huitong-http.conf" >"$NGINX_CONF"
     CONFIG_WRITTEN=1
+    sed "s/@@IP@@/$PUBLIC_IP/g" "$release_dir/deploy/nginx/huitong-http.conf" >"$NGINX_CONF"
     nginx -t
     systemctl enable --now nginx
     systemctl reload nginx
@@ -261,12 +261,12 @@ fi
 ln -s "$release_dir" "$APP_ROOT/.next-current"
 mv -Tf "$APP_ROOT/.next-current" "$APP_ROOT/current"
 SWITCHED=1
-install -m 644 "$release_dir/deploy/systemd/$SERVICE" "/etc/systemd/system/$SERVICE"
 UNIT_WRITTEN=1
+install -m 644 "$release_dir/deploy/systemd/$SERVICE" "/etc/systemd/system/$SERVICE"
+TIMER_WRITTEN=1
 for unit in huitong-cert-renew.service huitong-cert-renew.timer; do
     install -m 644 "$release_dir/deploy/systemd/$unit" "/etc/systemd/system/$unit"
 done
-TIMER_WRITTEN=1
 systemctl daemon-reload
 systemctl start "$SERVICE"
 healthy=0
@@ -275,8 +275,8 @@ for attempt in {1..20}; do
     sleep 1
 done
 (( healthy )) || fail '应用健康检查失败，可用 journalctl -u huitong-cloud 查看不含密码的服务日志。'
-sed "s/@@IP@@/$PUBLIC_IP/g" "$release_dir/deploy/nginx/huitong-https.conf" >"$NGINX_CONF"
 CONFIG_WRITTEN=1
+sed "s/@@IP@@/$PUBLIC_IP/g" "$release_dir/deploy/nginx/huitong-https.conf" >"$NGINX_CONF"
 nginx -t
 systemctl enable --now nginx
 systemctl reload nginx
