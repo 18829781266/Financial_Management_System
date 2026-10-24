@@ -27,3 +27,6 @@ uploads/
 
 # Private validation report based on user-provided financial records
 frontend/tests/真实ZIP验证.md
+
+# Standalone production deployment bundles
+releases/

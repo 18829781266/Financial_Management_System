@@ -9,6 +9,8 @@
     "test": "npm --prefix frontend test",
     "preview": "npm --prefix frontend run preview",
     "auth:configure": "npm --prefix frontend run auth:configure",
-    "db:local": "npm --prefix frontend run db:local"
+    "db:local": "npm --prefix frontend run db:local",
+    "test:server": "node --test deploy/*.test.mjs",
+    "package:server": "node deploy/package.mjs"
   }
 }

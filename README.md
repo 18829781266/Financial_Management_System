@@ -48,6 +48,10 @@ npm run dev
 
 支持JSON/CSV、PDF、图片及ZIP批量导入，文字型PDF字段提取、凭证续页合并和回单分拆；扫描影像需要补录或接入OCR。规则按配置优先级执行，未关联数据进入“请复核”；只有实际关联的数据展示在电子档案。支持最新导入优先、分页及批量删除、原件按真实版式翻页、单张放大、档案期间和实际凭证范围选择。原件、已有档案哈希及技术存储键在品牌更名时保持兼容。
 
+## 独立云服务器部署
+
+独立 Linux 部署使用 Node.js 24、SQLite 和 Nginx，保留当前网站的登录权限及全部浏览器财务功能。运行 `npm run build`、`npm run test:server`、`npm run package:server` 生成白名单安装包；安装、HTTPS、开机自启、备份和更新方法见 [汇通云服务器部署说明](deploy/README.md)。账号数据库保存在服务器的持久目录，财务原件及业务记录仍保存在访问者的浏览器中。更换网址不会自动迁移旧网址下的浏览器数据或已有 Sites 账号。
+
 ## Java业务后端
 
 详见 [backend/README.md](backend/README.md) 和 [按序代码清单](docs/按序代码清单.md)。需要JDK17、Maven3.9、MySQL8、Redis7。复制 `backend/.env.example` 为未跟踪的本地配置并填入自己的值，按说明初始化与启动。
