@@ -7,14 +7,14 @@ umask 077
 for command in curl sha256sum tar python3; do
     command -v "$command" >/dev/null || { printf '缺少必要工具：%s，请先安装后重试。\n' "$command" >&2; exit 1; }
 done
-PACKAGE_URL=https://raw.githubusercontent.com/18829781266/Financial_Management_System/main/deploy/bundles/huitong-server-4c5a644.tar.gz
-PACKAGE_SHA256=31fca5ee920e2a13bd1a45d608b1786858c727d2f9acc3ea734c0a521174de1c
+PACKAGE_URL=https://raw.githubusercontent.com/18829781266/Financial_Management_System/main/deploy/bundles/huitong-server-98d1bda.tar.gz
+PACKAGE_SHA256=10c117ebb4d34c2898510a6633765058738d08c30a504e0c335de6a96fc46716
 download_directory=$(mktemp -d /tmp/huitong-download.XXXXXXXX)
 cleanup() { local status=$?; rm -rf -- "$download_directory"; exit "$status"; }
 trap cleanup EXIT
 trap 'exit 130' INT TERM
 
-printf '正在下载汇通云服务器安装包（源码版本4c5a644，约3.1MB）……\n'
+printf '正在下载汇通云服务器安装包（源码版本98d1bda，约3.1MB）……\n'
 curl --fail --show-error --location --proto '=https' --tlsv1.2 \
     --retry 3 --connect-timeout 15 --max-time 300 \
     "$PACKAGE_URL" -o "$download_directory/huitong-server.tar.gz"
