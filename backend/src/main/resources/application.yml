@@ -1,0 +1,25 @@
+server:
+  port: ${PORT:8080}
+spring:
+  datasource:
+    url: ${MYSQL_URL:jdbc:mysql://localhost:3306/langchao_archive?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai}
+    username: ${MYSQL_USER:archive_app}
+    password: ${MYSQL_PASSWORD:}
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+  servlet:
+    multipart:
+      max-file-size: 20MB
+      max-request-size: 21MB
+mybatis-plus:
+  configuration:
+    map-underscore-to-camel-case: true
+archive:
+  storage-root: ${ARCHIVE_STORAGE_ROOT:./data}
+  ocr:
+    endpoint: ${OCR_ENDPOINT:}
+    api-key: ${OCR_API_KEY:}
+    provider: ${OCR_PROVIDER:disabled}

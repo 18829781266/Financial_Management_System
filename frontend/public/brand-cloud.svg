@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+ <defs>
+  <linearGradient id="surface" x1="7" y1="3" x2="57" y2="64" gradientUnits="userSpaceOnUse"><stop stop-color="#36C9DD"/><stop offset=".5" stop-color="#168FCA"/><stop offset="1" stop-color="#2759BE"/></linearGradient>
+  <linearGradient id="ribbon" x1="14" y1="19" x2="49" y2="46" gradientUnits="userSpaceOnUse"><stop stop-color="#FFF"/><stop offset="1" stop-color="#E0FAFF"/></linearGradient>
+  <linearGradient id="join" x1="19" y1="39" x2="47" y2="25" gradientUnits="userSpaceOnUse"><stop stop-color="#79E7EC"/><stop offset="1" stop-color="#C6FFFF"/></linearGradient>
+ </defs>
+ <rect x="1" y="1" width="62" height="62" rx="19" fill="url(#surface)"/>
+ <path d="M2 30V20A18 18 0 0 1 20 2h24C25 4 12 14 2 30Z" fill="#FFF" fill-opacity=".12"/>
+ <rect x="1.5" y="1.5" width="61" height="61" rx="18.5" stroke="#FFF" stroke-opacity=".28"/>
+ <path d="M17 38V24a7 7 0 0 1 14 0v17a7 7 0 0 0 14 0V27" stroke="#155293" stroke-opacity=".22" stroke-width="7" stroke-linecap="round" transform="translate(0 2)"/>
+ <path d="M17 37V23a7 7 0 0 1 14 0v18a7 7 0 0 0 14 0V27" stroke="url(#ribbon)" stroke-width="6" stroke-linecap="round"/>
+ <path d="M19 40c9 0 17-16 26-16" stroke="url(#join)" stroke-width="5" stroke-linecap="round"/>
+ <path d="m41 19 5 5-5 5" stroke="#E9FFFF" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

@@ -1,0 +1,29 @@
+node_modules/
+frontend/dist/
+*.tsbuildinfo
+backend/target/
+backend/data/
+.env
+.env.local
+*.log
+.DS_Store
+
+frontend/tests/e2e/artifacts/
+__pycache__/
+*.pyc
+
+frontend/public/pdfjs/
+
+# Credentials, runtime state and user uploads
+.env.*
+!.env.example
+.dev.vars*
+.wrangler/
+.sites-runtime/
+uploads/
+*.sqlite
+*.sqlite3
+*.db
+
+# Private validation report based on user-provided financial records
+frontend/tests/真实ZIP验证.md

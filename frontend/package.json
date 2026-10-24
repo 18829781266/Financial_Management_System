@@ -1,0 +1,40 @@
+{
+  "name": "langchao-cloud-web",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "build": "node scripts/build-worker.mjs",
+    "preview": "node scripts/local-preview.mjs",
+    "test": "vitest run",
+    "predev": "node scripts/prepare-pdf-assets.mjs",
+    "prebuild": "node scripts/prepare-pdf-assets.mjs",
+    "db:generate": "drizzle-kit generate",
+    "db:local": "node scripts/local-preview.mjs migrate",
+    "auth:configure": "node scripts/configure-local-admin.mjs"
+  },
+  "dependencies": {
+    "drizzle-orm": "^0.44.7",
+    "element-plus": "^2.9.3",
+    "html-to-image": "^1.11.13",
+    "jspdf": "^3.0.3",
+    "jszip": "^3.10.1",
+    "lucide-vue-next": "^0.468.0",
+    "page-flip": "^2.0.7",
+    "pdf-lib": "^1.17.1",
+    "pdfjs-dist": "^4.10.38",
+    "vue": "^3.5.13"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^5.2.1",
+    "drizzle-kit": "^0.31.11",
+    "esbuild": "^0.25.12",
+    "fake-indexeddb": "^6.2.6",
+    "typescript": "~5.7.3",
+    "vite": "^6.0.7",
+    "vitest": "^3.2.7",
+    "vue-tsc": "^2.2.0",
+    "wrangler": "^4.152.0"
+  }
+}

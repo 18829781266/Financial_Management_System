@@ -1,0 +1,14 @@
+{
+  "name": "huitong-electronic-archive",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "npm --prefix frontend run preview",
+    "build": "npm --prefix frontend run build",
+    "setup": "npm --prefix frontend ci",
+    "test": "npm --prefix frontend test",
+    "preview": "npm --prefix frontend run preview",
+    "auth:configure": "npm --prefix frontend run auth:configure",
+    "db:local": "npm --prefix frontend run db:local"
+  }
+}
