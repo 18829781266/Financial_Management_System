@@ -1,5 +1,6 @@
 import type { PdfTextItem, PdfTextPage } from './pdfText';
 import { amountCents } from './money';
+import {normalizeBankAccount} from './entryAttachments';
 
 export interface ParsedPdfDocument {
  type:'invoice'|'bank'|'contract'|'approval';
@@ -15,6 +16,9 @@ export interface ParsedPdfDocument {
  sourceRegion?:{x:number;y:number;width:number;height:number};
  bankNo?:string;
  receiptNo?:string;
+ payerAccount?:string;
+ payeeAccount?:string;
+ accountVersion?:number;
 }
 const compact=(text:string)=>text.normalize('NFKC').replace(/\s+/g,'');
 /** PDF.js 常将带字间距的“户 名”“全 称”拆成单字；仅合并已知同基线字段标签。 */
@@ -152,6 +156,27 @@ function bankAmount(items:PdfTextItem[],width:number):string{
  if(amountLabel){const value=rightOf(amountLabel,items,width,6);if(/^(?:CNY|RMB|[¥￥])/.test(compact(value)))return cleanAmount(value);}
  return '';
 }
+/** 收付款账号分开提取。通用“账号”仅在角色或已支持的双栏布局明确时归属。 */
+function bankAccounts(items:PdfTextItem[],width:number):{payerAccount:string;payeeAccount:string}{
+ const accounts:{payer:string[];payee:string[]}={payer:[],payee:[]};
+ const explicit=/^(付款人(?:开户)?账号|付款(?:银行)?账号|付款方账号|付方账号|付款账户|付款人账户|借方账号|转出账号|收款人(?:开户)?账号|收款(?:银行)?账号|收款方账号|收方账号|收款账户|收款人账户|贷方账号|转入账号)[:：]?/;
+ const generic=items.filter(item=>/^(?:账号|帐?号|账户|银行账号|开户账号)[:：]?/.test(compact(item.text)));
+ for(const label of items){
+  const text=compact(label.text),match=text.match(explicit);
+  let role:PartyRole|undefined;let value='';
+  if(match){role=/^(?:付|借|转出)/.test(match[1]!)?'payer':'payee';value=text.slice(match[0].length)||rightOf(label,items,width,6);}
+  else if(generic.includes(label)){
+   const prefix=text.match(/^(?:银行账号|开户账号|账号|帐?号|账户)[:：]?/)![0];
+   value=text.slice(prefix.length)||rightOf(label,items,width,6);
+   const markers=items.filter(item=>item.x<=label.x&&label.x-item.x<100&&Math.abs(item.y-label.y)<85&&/^(?:付|付款|付款人|付款方|收|收款|收款人|收款方)$/.test(compact(item.text))).sort((a,b)=>Math.abs(a.y-label.y)-Math.abs(b.y-label.y));
+   if(markers[0])role=/^付/.test(compact(markers[0].text))?'payer':'payee';
+   else if(generic.some(other=>other!==label&&Math.abs(other.y-label.y)<12&&(other.x<width/2)!==(label.x<width/2)))role=label.x<width/2?'payer':'payee';
+  }
+  const account=normalizeBankAccount(value);
+  if(role&&account&&!accounts[role].includes(account))accounts[role].push(account);
+ }
+ return {payerAccount:accounts.payer.length===1?accounts.payer[0]!:'',payeeAccount:accounts.payee.length===1?accounts.payee[0]!:''};
+}
 function parseBankRegion(page:PdfTextPage,items:PdfTextItem[],region:ParsedPdfDocument['sourceRegion']):ParsedPdfDocument{
  const reasons:string[]=[];const width=page.width;
  const receiptNo=labelValue(items,width,/^(?:电子回单号码|回单编号)[:：]?/).replace(/\s/g,'').match(/[A-Za-z0-9][A-Za-z0-9-]{5,}/)?.[0]||'';
@@ -161,10 +186,12 @@ function parseBankRegion(page:PdfTextPage,items:PdfTextItem[],region:ParsedPdfDo
  const number=receiptNo||(bankNo?(sequence?`${bankNo} / No.${sequence}`:bankNo):sequence&&date?`No.${sequence} / ${date}`:'');
  if(!receiptNo&&!bankNo&&sequence)reasons.push('原件未列交易流水号，日期与回单序号仅作本地索引，请复核');
  const parties=partyFields(items,width,'bank',reasons);
+ const accounts=bankAccounts(items,width);
+ if(!accounts.payeeAccount)reasons.push('未可靠读取收款账号，请核对原件后补录');
  if(!number)reasons.push('未可靠读取回单编号，请从原件补录');
  if(!date)reasons.push('未可靠读取记账或会计日期，请从原件补录，不能使用打印日期');
  if(!amount)reasons.push('未可靠读取交易金额，请从原件补录');
- return {type:'bank',number,...parties,supplier:parties.payerName,amount,date,sourcePages:[page.pageNumber],sourceRegion:region,reviewReasons:reasons,bankNo:bankNo||undefined,receiptNo:receiptNo||undefined};
+ return {type:'bank',number,...parties,...accounts,accountVersion:1,supplier:parties.payerName,amount,date,sourcePages:[page.pageNumber],sourceRegion:region,reviewReasons:reasons,bankNo:bankNo||undefined,receiptNo:receiptNo||undefined};
 }
 /** 按真实抬头切分同页多回单；无法识别模板时保留为待补录，禁止推算金额或主体。 */
 export function parseDocumentPages(pages:PdfTextPage[],_ownCompany?:string):ParsedPdfDocument[]{

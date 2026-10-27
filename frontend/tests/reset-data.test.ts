@@ -24,7 +24,7 @@ describe('清空全部业务数据而不是恢复演示',()=>{
  it('首次打开没有演示记录，仍有默认可用规则',async()=>{
   memory.clear();vi.resetModules();store=(await import('../src/store')).useArchiveStore();
   for(const collection of [store.state.vouchers,store.state.documents,store.state.archives,store.state.logs,store.state.payerGroups,store.state.nameAssociations])expect(collection).toEqual([]);
-  expect(store.state.rules).toHaveLength(8);expect(store.state.rules.every(rule=>rule.enabled)).toBe(true);
+  expect(store.state.rules).toHaveLength(9);expect(store.state.rules.find(rule=>rule.id==='R09')?.enabled).toBe(true);expect(store.state.rules.every(rule=>rule.enabled)).toBe(true);
  });
  it('同时清除锁定档案、凭证、单据、关系、日志、原件PDF及孤儿文件',async()=>{
   const {voucher,doc}=await populate();const ids=[voucher.fileId!,doc.fileId!,'archive-pdf','orphan-file'];

@@ -5,6 +5,9 @@ const run=(file,args)=>{const result=spawnSync(process.execPath,[file,...args],{
 await rm('dist',{recursive:true,force:true});
 run('node_modules/vue-tsc/bin/vue-tsc.js',['-b']);
 run('node_modules/vite/bin/vite.js',['build']);
+const packageInfo=JSON.parse(await readFile('package.json','utf8'));
+const revision=spawnSync('git',['rev-parse','HEAD'],{encoding:'utf8'});
+await writeFile('dist/client/version.json',JSON.stringify({version:packageInfo.version,sourceCommit:revision.status===0?revision.stdout.trim():null},null,2)+'\n');
 await mkdir('dist/server',{recursive:true});
 await mkdir('dist/.openai',{recursive:true});
 await build({entryPoints:['worker/index.js'],bundle:true,format:'esm',platform:'browser',target:'es2022',outfile:'dist/server/index.js'});

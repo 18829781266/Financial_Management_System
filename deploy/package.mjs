@@ -50,6 +50,7 @@ try {
   }
   const manifest = {
     schemaVersion: 1, name: '汇通云服务器', createdAt: new Date().toISOString(),
+    applicationVersion: JSON.parse(await readFile(join(root,'frontend/package.json'),'utf8')).version,
     sourceCommit: git('rev-parse', 'HEAD'), sourceDirty: Boolean(git('status', '--porcelain')),
     nodeVersion: '24.19.0', files,
   };

@@ -10,6 +10,8 @@ import {evaluateMatchPlan} from './matchEvaluation';
 import {nameAssociationRule,pruneNameAssociations,detachNameAssociations,visibleArchiveGroups} from './nameAssociation';
 import {collectionStatus} from './matchWorkflow';
 import {normalizeSupplier} from './matchUtils';
+import {receiptEntryRule,RECEIPT_RULE_ID,normalizeBankAccount,entryMoney,attachmentCoverage,clearReceiptReference,writeReceiptReference,businessDate} from './entryAttachments';
+import type {EntryEvaluation} from './entryAttachments';
 export {normalizeSupplier,supplierSimilarity} from './matchUtils';
 import type { ArchiveState, ArchiveBook, Voucher, SourceDocument, MatchRule, GenerateArchiveRequest, VoucherEntry, PayerGroup } from './types';
 
@@ -28,6 +30,7 @@ function restore(): ArchiveState {
       const parsed = JSON.parse(raw) as ArchiveState;
       if (Array.isArray(parsed.vouchers) && Array.isArray(parsed.documents) && Array.isArray(parsed.archives) && Array.isArray(parsed.rules) && Array.isArray(parsed.logs)) {
         if(!parsed.rules.some(rule=>rule.id==='R08'))parsed.rules.push(nameAssociationRule());
+        if(!parsed.rules.some(rule=>rule.id===RECEIPT_RULE_ID))parsed.rules.unshift(receiptEntryRule());
         pruneNameAssociations(parsed);
         const run=parsed.lastMatchRun;
         const outcomes=Array.isArray(run?.outcomes)?run.outcomes:[];
@@ -138,6 +141,18 @@ function normalizeVoucher(r:Record<string,unknown>, index:number,origin?:string,
     const attachment = field('expectedAttachments','expectedAttachmentCount', '附件数');
     const expectedAttachments = attachment === undefined ? undefined : Number(attachment);
     const voucher:Voucher={id:id('voucher'),no,period,supplier,summary,amount,date,company:String(field('company','companyName','CompanyName','单位名称')??'').trim()||undefined,status:'pending',matchReviewRequired:false,documentIds:[],invoiceNo:String(field('invoiceNo','发票号')??'')||undefined,contractNo:String(field('contractNo','合同号')??'')||undefined,bankNo:String(field('bankNo','bankFlowNo','银行流水号')??'')||undefined,approvalNo:String(field('approvalNo','审批单号')??'')||undefined,expectedAttachments};
+    const rawEntries=field('entries','Entries','分录');
+    if(rawEntries!==undefined){
+      let rows=rawEntries;
+      if(typeof rows==='string'){try{rows=JSON.parse(rows);}catch{throw new Error('分录字段需为JSON数组');}}
+      if(!Array.isArray(rows)||!rows.length||rows.length>10000)throw new Error('分录需为非空数组，最多10000行');
+      voucher.entries=rows.map(entry=>{
+        if(!entry||typeof entry!=='object'||Array.isArray(entry))throw new Error('每条分录必须是对象');
+        const row=entry as Record<string,unknown>;
+        const debit=(amountCents(row.debit??row.Debit??row['借方']??'0.00')/100).toFixed(2),credit=(amountCents(row.credit??row.Credit??row['贷方']??'0.00')/100).toFixed(2);
+        return {summary:String(row.summary??row.Abstract??row['摘要']??''),account:String(row.account??row.Account??row['科目']??''),debit,credit};
+      });
+    }
     if(metadata){
       if(metadata.sourceKind!=='pdf-text'||!Array.isArray(metadata.sourcePages)||!metadata.sourcePages.length||metadata.sourcePages.some(page=>!Number.isInteger(page)||page<1||page>500)||new Set(metadata.sourcePages).size!==metadata.sourcePages.length)throw new Error('PDF 来源页号无效');
       if(!Array.isArray(metadata.entries)||!metadata.entries.length||metadata.entries.length>10000)throw new Error('PDF 凭证缺少可核对的分录');
@@ -191,7 +206,7 @@ function prepareDocuments(drafts:DocumentDraft[]):SourceDocument[]{
   if(number)keys.add(key);
   const reasons=[...(fields.reviewReasons||[])];
   if(!date)reasons.push('未提取到业务日期，请核对原件');
-  documents.push({id:id('document'),fileId:id('file'),name:file.name,type,supplier,payerName:supplier,payeeName,partyVersion:2,bankNo:fields.bankNo,receiptNo:fields.receiptNo,amount,date,number,seal:fields.seal===true,status:'pending',matchReviewRequired:false,extractionStatus:pending?'pending':'reviewed',sourceKind:fields.sourceKind,sourcePages:fields.sourcePages?[...fields.sourcePages]:undefined,reviewReasons:pending?[...new Set(reasons)]:[]});
+  documents.push({id:id('document'),fileId:id('file'),name:file.name,type,supplier,payerName:supplier,payeeName,partyVersion:2,bankNo:fields.bankNo,receiptNo:fields.receiptNo,payerAccount:normalizeBankAccount(fields.payerAccount),payeeAccount:normalizeBankAccount(fields.payeeAccount),accountVersion:fields.accountVersion??(fields.payeeAccount?1:undefined),remarks:String(fields.remarks||''),amount,date,number,seal:fields.seal===true,status:'pending',matchReviewRequired:false,extractionStatus:pending?'pending':'reviewed',sourceKind:fields.sourceKind,sourcePages:fields.sourcePages?[...fields.sourcePages]:undefined,reviewReasons:pending?[...new Set(reasons)]:[]});
  }
  return documents;
 }
@@ -248,7 +263,7 @@ async function deleteVouchers(ids:string[]):Promise<number>{
   await removeFiles(rows.flatMap(v=>v.fileId?[v.fileId]:[]));
   ensureIdle();
   detachNameAssociations(state,ids,rows.flatMap(v=>v.documentIds));
-  rows.forEach(v=>v.documentIds.forEach(docId=>{const doc=state.documents.find(d=>d.id===docId);if(doc){doc.status='pending';doc.matchReviewRequired=true;doc.lastMatchReason='原关联已释放，请人工复核后重新关联';}}));
+  rows.forEach(v=>v.documentIds.forEach(docId=>{const doc=state.documents.find(d=>d.id===docId);if(doc){clearReceiptReference(doc);doc.status='pending';doc.matchReviewRequired=true;doc.lastMatchReason='原关联已释放，请人工复核后重新关联';}}));
   state.vouchers=state.vouchers.filter(v=>!ids.includes(v.id));bumpMatchDataRevision();rebuildPayerGroups();log('批量删除凭证',`删除 ${rows.length} 张凭证：${rows.map(v=>v.no).join('、')}；关联单据已释放`);return rows.length;
 }
 async function deleteDocuments(ids:string[]):Promise<number>{
@@ -258,8 +273,8 @@ async function deleteDocuments(ids:string[]):Promise<number>{
   // 删除组内任一单据时解除整组，避免留下一张表面已匹配、实际缺附件的凭证。
   state.vouchers.filter(v=>v.documentIds.some(id=>ids.includes(id))).forEach(v=>{
     detachNameAssociations(state,[v.id],v.documentIds);
-    v.documentIds.forEach(docId=>{const doc=state.documents.find(d=>d.id===docId);if(doc){doc.status='pending';doc.matchReviewRequired=true;doc.lastMatchReason='原关联已释放，请人工复核后重新关联';}});
-    v.documentIds=[];v.status='pending';v.matchReviewRequired=true;delete v.ruleId;delete v.confidence;
+    v.documentIds.forEach(docId=>{const doc=state.documents.find(d=>d.id===docId);if(doc){clearReceiptReference(doc);doc.status='pending';doc.matchReviewRequired=true;doc.lastMatchReason='原关联已释放，请人工复核后重新关联';}});
+    v.documentIds=[];v.entryAttachments=[];v.attachmentReviewRequired=true;v.status='pending';v.matchReviewRequired=true;delete v.ruleId;delete v.confidence;
   });
   state.documents=state.documents.filter(d=>!ids.includes(d.id));bumpMatchDataRevision();rebuildPayerGroups();log('批量删除单据',`删除 ${rows.length} 份单据：${rows.map(d=>d.name).join('、')}；相关凭证返回待匹配`);return rows.length;
 }
@@ -267,11 +282,12 @@ function updateVoucher(voucherId:string,values:Record<string,unknown>):void{
   ensureIdle();const voucher=state.vouchers.find(v=>v.id===voucherId);
   if(!voucher||isVoucherLocked(voucher))throw new Error('只能编辑或复核未归档的凭证');
   const beforeMatchData=JSON.stringify(voucher);
-  const wasMatched=voucher.status==='matched';
+  const wasMatched=voucher.status==='matched'||!!voucher.entryAttachments?.length;
   const matchReviewRequired=voucher.matchReviewRequired===true;
   const relation={status:voucher.status,documentIds:[...voucher.documentIds],ruleId:voucher.ruleId,confidence:voucher.confidence};
   const metadata:VoucherPdfMetadata|undefined=voucher.sourceKind==='pdf-text'&&voucher.entries?.length?{sourceKind:'pdf-text',sourcePages:voucher.sourcePages||[],company:voucher.company,entries:voucher.entries,reviewReasons:voucher.autoMatchBlockedReasons||[]}:undefined;
   const next=normalizeVoucher(values,0,undefined,!!metadata,metadata);
+  if(!next.entries&&voucher.entries)next.entries=JSON.parse(JSON.stringify(voucher.entries));
   if(!metadata&&inputField(values,'company','companyName','CompanyName','单位名称')===undefined)next.company=voucher.company;
   if(metadata&&voucher.sourceAmount!==undefined&&amountCents(next.amount)!==amountCents(voucher.sourceAmount))throw new Error('PDF 凭证金额来自原始分录合计，不能直接改写；请核对原件后重新导入');
   if(wasMatched&&(['no','period','date','supplier','company','amount','summary','invoiceNo','contractNo','bankNo','approvalNo'] as const).some(key=>(next[key]??'')!==(voucher[key]??'')))throw new Error('已匹配凭证若需改动关键字段，请先解除匹配；可直接核对并保存复核');
@@ -294,11 +310,15 @@ function updateDocument(documentId:string,fields:DocumentDraft['fields']):void{
   if(!doc||isDocumentLocked(doc))throw new Error('只能编辑或复核未归档的单据');
   const beforeMatchData=JSON.stringify(doc);
   const supplier=(fields.payerName??fields.supplier??'').trim(),payeeName=fields.payeeName?.trim()??doc.payeeName??'',number=fields.number?.trim()??'',amount=amountCents(fields.amount)/100,date=validateDate(fields.date);
+  const payeeAccount=fields.payeeAccount===undefined?doc.payeeAccount:normalizeBankAccount(fields.payeeAccount),payerAccount=fields.payerAccount===undefined?doc.payerAccount:normalizeBankAccount(fields.payerAccount);
+  if(fields.payeeAccount?.trim()&&!payeeAccount)throw new Error('收款账号需为完整数字账号或至少4位尾号');
+  if(doc.status==='matched'&&((payeeAccount||'')!==(doc.payeeAccount||'')||(payerAccount||'')!==(doc.payerAccount||'')))throw new Error('已匹配单据修改账号前请先解除匹配');
   if(doc.status==='matched'&&(supplier!==(doc.payerName??doc.supplier)||payeeName!==(doc.payeeName??'')||number!==doc.number||amount!==doc.amount||date!==doc.date||fields.type!==doc.type))throw new Error('已匹配单据若需改动关键字段，请先解除匹配；可直接核对并保存复核');
-  if(!supplier||!number||amount<=0)throw new Error('请补齐客商、单据编号、正数金额和日期');
+  if((!supplier&&fields.type!=='bank')||!number||amount<=0)throw new Error('请补齐客商、单据编号、正数金额和日期');
   if(!fields.type||!['invoice','bank','contract','approval'].includes(fields.type))throw new Error('单据类型无效');
   if(state.documents.some(d=>d.id!==documentId&&d.type===fields.type&&d.number===number&&d.date.slice(0,7)===date.slice(0,7)))throw new Error('同期间、同类型单据编号已存在');
-  Object.assign(doc,{supplier,payerName:supplier,payeeName,partyVersion:2,number,amount,date,type:fields.type,seal:fields.seal===true,extractionStatus:'reviewed',reviewReasons:[]});
+  Object.assign(doc,{supplier,payerName:supplier,payeeName,partyVersion:2,payerAccount,payeeAccount,accountVersion:1,remarks:fields.remarks===undefined?doc.remarks:String(fields.remarks),number,amount,date,type:fields.type,seal:fields.seal===true,extractionStatus:'reviewed',reviewReasons:[]});
+  if(doc.matchedVoucherId!==undefined&&doc.matchedEntryIndex!==undefined){const voucher=state.vouchers.find(v=>v.id===doc.matchedVoucherId);if(voucher)writeReceiptReference(doc,voucher,doc.matchedEntryIndex);}
   if(beforeMatchData!==JSON.stringify(doc))bumpMatchDataRevision();
   rebuildPayerGroups();
   log('复核单据',`已补录并复核 ${doc.name}`);
@@ -306,11 +326,11 @@ function updateDocument(documentId:string,fields:DocumentDraft['fields']):void{
 
 function unmatchVoucher(voucherId:string,reason:string):void{
   ensureIdle();const v=state.vouchers.find(v=>v.id===voucherId);
-  if(!v||collectionStatus(v)!=='matched'||isVoucherLocked(v))throw new Error('只能解除未归档凭证的关联');
+  if(!v||(collectionStatus(v)!=='matched'&&!v.documentIds.length)||isVoucherLocked(v))throw new Error('只能解除未归档凭证的关联');
   if(!reason.trim())throw new Error('请填写解除匹配原因');
   detachNameAssociations(state,[v.id],v.documentIds);
-  v.documentIds.forEach(id=>{const d=state.documents.find(d=>d.id===id);if(d){d.status='pending';d.matchReviewRequired=true;d.lastMatchReason='原关联已释放，请人工复核后重新关联';}});
-  v.documentIds=[];v.status='pending';v.matchReviewRequired=true;v.lastMatchReason=`已人工解除关联：${reason.trim()}`;delete v.ruleId;delete v.confidence;bumpMatchDataRevision();rebuildPayerGroups();
+  v.documentIds.forEach(id=>{const d=state.documents.find(d=>d.id===id);if(d){clearReceiptReference(d);d.status='pending';d.matchReviewRequired=true;d.lastMatchReason='原关联已释放，请人工复核后重新关联';}});
+  v.documentIds=[];v.entryAttachments=[];v.attachmentReviewRequired=true;v.status='pending';v.matchReviewRequired=true;v.lastMatchReason=`已人工解除关联：${reason.trim()}`;delete v.ruleId;delete v.confidence;bumpMatchDataRevision();rebuildPayerGroups();
   log('解除匹配',`${v.no}：${reason.trim()}；原单据已释放`);
 }
 function confirmSeal(documentId:string):void{
@@ -340,13 +360,13 @@ function matchedPayerGroups(source:ArchiveState):PayerGroup[]{
  const groups=new Map<string,PayerGroup>();
  const documents=new Map(source.documents.map(doc=>[doc.id,doc]));
  for(const voucher of source.vouchers){
-  if(voucher.status!=='matched'||!voucher.documentIds.length)continue;
+  if((voucher.status!=='matched'&&!voucher.entryAttachments?.length)||!voucher.documentIds.length)continue;
   const evidence=voucher.documentIds.map(docId=>documents.get(docId));
   // 不完整关系不得只拿其中几张影像冒充完整归档证据。
   if(evidence.some(doc=>!doc||doc.status!=='matched'))continue;
   for(const doc of evidence as SourceDocument[]){
    const payer=(doc.payerName??(doc.sourceKind==='pdf-text'?'':doc.supplier)).trim();
-   const docPeriod=doc.date.slice(0,7);if(!/^\d{4}-(0[1-9]|1[0-2])$/.test(docPeriod))continue;
+   const docPeriod=voucher.entryAttachments?.length?voucher.period:doc.date.slice(0,7);if(!/^\d{4}-(0[1-9]|1[0-2])$/.test(docPeriod))continue;
    const key=`${docPeriod}/${payer?normalizeSupplier(payer):'__unassigned__'}`;
    let group=groups.get(key);
    if(!group){group={id:`payer:${key}`,period:docPeriod,payerName:payer||'请复核付款人',needsPayerReview:!payer,documentIds:[],voucherIds:[],updatedAt:localTime()};groups.set(key,group);}
@@ -394,7 +414,7 @@ async function refreshDocumentParties():Promise<number>{
   const checked=evaluateRules([{...voucher,status:'pending'}],state.documents.map(doc=>voucher.documentIds.includes(doc.id)?{...doc,status:'pending'}:doc),[rule]);
   const relation=checked.matches[0];
   if(!relation||relation.documentIds.length!==voucher.documentIds.length||relation.documentIds.some(docId=>!voucher.documentIds.includes(docId))){
-   voucher.documentIds.forEach(docId=>{const doc=state.documents.find(item=>item.id===docId);if(doc){doc.status='pending';doc.matchReviewRequired=true;doc.lastMatchReason='原关联已释放，请人工复核后重新关联';}});
+   voucher.documentIds.forEach(docId=>{const doc=state.documents.find(item=>item.id===docId);if(doc){clearReceiptReference(doc);doc.status='pending';doc.matchReviewRequired=true;doc.lastMatchReason='原关联已释放，请人工复核后重新关联';}});
    voucher.documentIds=[];voucher.status='pending';voucher.matchReviewRequired=true;delete voucher.ruleId;delete voucher.confidence;voucher.lastMatchReason='付款人字段已按原件修正，请按当前规则重新匹配';released++;
   }
  }
@@ -404,7 +424,115 @@ async function refreshDocumentParties():Promise<number>{
  if(changed)log('核对付款人',`已从本地原件更新 ${changed} 份单据的付款人与收款人；旧客商值保留供复核`);
  return changed;
 }
+/** 旧数据无账号字段时直接重读已保存原件；不要求用户重新上传或清空数据。 */
+async function refreshDocumentAccounts():Promise<number>{
+ const documents=state.documents.filter(doc=>doc.type==='bank'&&doc.sourceKind==='pdf-text'&&doc.accountVersion!==1&&!isDocumentLocked(doc));
+ if(!documents.length)return 0;
+ const [{readPdfText},{parseDocumentPages}]=await Promise.all([import('./pdfText'),import('./pdfDocuments')]);
+ let changed=0;
+ for(const doc of documents){
+  if(!doc.fileId)continue;
+  const source=await loadFile(doc.fileId);if(!source)continue;
+  try{
+   const parsed=parseDocumentPages(await readPdfText(new File([source],doc.name,{type:'application/pdf'})));
+   const candidates=parsed.filter(record=>record.type==='bank'&&(record.number===doc.number||record.receiptNo===doc.receiptNo&&!!doc.receiptNo));
+   const record=candidates.length===1?candidates[0]:parsed.length===1?parsed[0]:undefined;
+   if(record){doc.payerAccount=record.payerAccount||'';doc.payeeAccount=record.payeeAccount||'';doc.accountVersion=1;changed++;}
+  }catch{doc.lastMatchReason='回单原件账号提取失败，请核对原件后补录收款账号';}
+  await new Promise<void>(resolve=>setTimeout(resolve,0));
+ }
+ if(changed){bumpMatchDataRevision();log('提取回单账号',`已从原件补充 ${changed} 份回单的独立收付款账号；未识别账号留待人工复核`);}
+ return changed;
+}
+
+async function autoMatchEntries(period?:string):Promise<{matched:number;remaining:number;grouped:number}>{
+ if(matching||writing)throw new Error('其他数据操作正在执行，请稍候');matching=true;
+ try{
+  await refreshDocumentParties();await refreshDocumentAccounts();
+  const targets=state.vouchers.filter(v=>(!period||v.period===period)&&!isVoucherLocked(v));
+  const receiptRule=state.rules.find(rule=>rule.id===RECEIPT_RULE_ID)!;
+  if(!receiptRule.enabled){
+   for(const voucher of targets)if(voucher.status!=='matched'){voucher.matchReviewRequired=true;voucher.lastMatchReason='金额＋收款账号规则已停用，请启用后重试';}
+   log('自动匹配暂停','金额＋收款账号规则已停用，现有关联保留，未执行新的自动关联');
+   return {matched:0,remaining:targets.filter(v=>v.status!=='matched').length,grouped:visibleArchiveGroups(state).filter(group=>!period||group.period===period).length};
+  }
+  const targetIds=new Set(targets.map(v=>v.id));
+  const preserved=targets.filter(v=>v.ruleId==='MANUAL'&&v.status==='matched'&&!v.entryAttachments?.length);
+  const preservedIds=new Set(preserved.map(v=>v.id));
+  const already=new Set(targets.filter(v=>v.status==='matched'&&!v.attachmentReviewRequired).map(v=>v.id));
+  const manualLinks=targets.flatMap(v=>(v.entryAttachments||[]).filter(link=>link.ruleId==='MANUAL'));
+  const protectedDocuments=new Set([...state.vouchers.filter(v=>!targetIds.has(v.id)||preservedIds.has(v.id)).flatMap(v=>v.documentIds),...manualLinks.map(link=>link.documentId)]);
+  const oldDocuments=new Set(targets.flatMap(v=>v.documentIds));
+  const beforeDocumentIds=new Set(targets.flatMap(v=>v.entryAttachments||[]).map(link=>link.documentId));
+  const dates=targets.map(v=>businessDate(v.date)).filter(Number.isFinite);
+  const min=dates.length?Math.min(...dates)-29*86400000:NaN,max=dates.length?Math.max(...dates)+29*86400000:NaN;
+  const documents=state.documents.filter(doc=>!isDocumentLocked(doc)&&!protectedDocuments.has(doc.id)&&(!period||!doc.date||doc.date.startsWith(period)||oldDocuments.has(doc.id)||(businessDate(doc.date)>=min&&businessDate(doc.date)<=max)));
+  const snapshots=targets.filter(v=>!preservedIds.has(v.id)).map(v=>({...JSON.parse(JSON.stringify(v)) as Voucher,status:'pending' as const,nameAssociationIds:[],entryAttachments:(v.entryAttachments||[]).filter(link=>link.ruleId==='MANUAL'),documentIds:(v.entryAttachments||[]).filter(link=>link.ruleId==='MANUAL').map(link=>link.documentId)}));
+  const sourceDocuments=documents.map(doc=>({...JSON.parse(JSON.stringify(doc)) as SourceDocument,status:'pending' as const,nameAssociationIds:[]}));
+  const rules=JSON.parse(JSON.stringify(state.rules)) as MatchRule[];
+  // 匹配计划失败时不清除现有关系。全部候选计算成功以后才一次性提交新关联。
+  // 同一回单也可能命中相邻期间的分录；将邻近凭证纳入歧义检测，但只提交本次选定期间。
+  const context=period?state.vouchers.filter(v=>!targetIds.has(v.id)&&!isVoucherLocked(v)&&businessDate(v.date)>=min&&businessDate(v.date)<=max).map(v=>JSON.parse(JSON.stringify(v)) as Voucher):[];
+  const plan=await evaluateMatchPlan([...snapshots,...context],sourceDocuments,rules,localTime());
+  const evaluated=plan.financial as EntryEvaluation;
+  const result:EntryEvaluation={...evaluated,matches:evaluated.matches.filter(match=>targetIds.has(match.voucherId)),outcomes:evaluated.outcomes.filter(outcome=>targetIds.has(outcome.voucherId))};
+  const byVoucher=new Map(state.vouchers.map(v=>[v.id,v]));const byDocument=new Map(state.documents.map(doc=>[doc.id,doc]));
+  detachNameAssociations(state,targets.map(v=>v.id),documents.map(doc=>doc.id));
+  for(const doc of documents){clearReceiptReference(doc);doc.status='pending';doc.matchReviewRequired=true;}
+  for(const snapshot of snapshots){
+   const voucher=byVoucher.get(snapshot.id)!;
+   voucher.entryAttachments=snapshot.entryAttachments;voucher.documentIds=snapshot.documentIds;voucher.status='pending';voucher.attachmentReviewRequired=true;voucher.matchReviewRequired=true;delete voucher.ruleId;delete voucher.confidence;
+  }
+  for(const match of result.matches){const voucher=byVoucher.get(match.voucherId)!;voucher.entryAttachments=match.entryAttachments;voucher.documentIds=[...new Set(match.documentIds)];voucher.ruleId='R09';voucher.confidence=100;}
+  for(const voucher of targets){
+   if(preservedIds.has(voucher.id))continue;
+   for(const link of voucher.entryAttachments||[]){const doc=byDocument.get(link.documentId);if(!doc)continue;doc.status='matched';doc.matchReviewRequired=false;doc.lastMatchReason=link.ruleId==='MANUAL'?'已人工复核并关联分录':'金额、收款账号及日期已逐行核对';writeReceiptReference(doc,voucher,link.entryIndex);}
+   const complete=attachmentCoverage(voucher);
+   voucher.status=complete?'matched':'pending';voucher.attachmentReviewRequired=!complete;voucher.matchReviewRequired=!complete;
+   if(voucher.entryAttachments?.length){voucher.ruleId=voucher.entryAttachments.every(link=>link.ruleId==='MANUAL')?'MANUAL':'R09';voucher.confidence=100;}
+  }
+  for(const outcome of result.outcomes){const voucher=byVoucher.get(outcome.voucherId);if(voucher){voucher.lastMatchReason=outcome.reason;voucher.lastMatchRuleId=outcome.ruleId;}}
+  const docReasons=new Map(result.documentOutcomes.map(item=>[item.documentId,item.reason]));
+  for(const doc of documents)if(doc.status!=='matched')doc.lastMatchReason=docReasons.get(doc.id)||'未找到满足联合条件的唯一分录，请人工复核';
+  rebuildPayerGroups();
+  const remaining=targets.filter(v=>v.status!=='matched').length,matched=targets.filter(v=>v.status==='matched'&&!already.has(v.id)).length;
+  const groupCount=visibleArchiveGroups(state).filter(group=>!period||group.period===period).length;
+  const scopeIds=new Set([...documents.map(doc=>doc.id),...targets.flatMap(v=>v.documentIds)]);
+  const associatedDocuments=state.documents.filter(doc=>scopeIds.has(doc.id)&&doc.status==='matched').length;
+  state.lastMatchRun={id:id('match-run'),time:localTime(),period:period||'',matched,remaining,groupCount,outcomes:result.outcomes,rules,importSequence:state.lastImportSequence||0,dataRevision:state.matchDataRevision||0,financialMatched:result.matches.filter(match=>match.complete).length,nameAssociatedVouchers:0,nameAssociatedDocuments:0,associatedDocuments,newlyAssociatedDocuments:result.matches.reduce((sum,match)=>sum+match.entryAttachments.filter(link=>link.ruleId==='R09'&&!beforeDocumentIds.has(link.documentId)).length,0),remainingDocuments:documents.filter(doc=>doc.status!=='matched').length};
+  log('自动匹配',`按分录金额＋收款账号（尾号至少4位）＋日期差<30天完成：${targets.length-remaining} 张凭证完成，${associatedDocuments} 份单据已关联并回写凭证号；${remaining} 张凭证及 ${state.lastMatchRun.remainingDocuments} 份单据请复核`);
+  return {matched,remaining,grouped:groupCount};
+ }finally{matching=false;}
+}
+
+/** 人工处理也绑定到具体摘要行；账号/日期例外必须留理由，金额仍逐行核对。 */
+function reconcileEntry(voucherId:string,entryIndex:number,documentIds:string[],reason:string):void{
+ ensureIdle();
+ const voucher=state.vouchers.find(v=>v.id===voucherId);
+ if(!voucher||isVoucherLocked(voucher))throw new Error('只能复核未锁定的凭证附件');
+ const entry=voucher.entries?.[entryIndex];if(!entry||!Number.isInteger(entryIndex))throw new Error('分录不存在，请重新打开凭证');
+ const money=entryMoney(entry);if(!money)throw new Error('该分录金额无效，请先核对原始借贷列');
+ if(!reason.trim())throw new Error('请填写人工复核依据');
+ if(new Set(documentIds).size!==documentIds.length)throw new Error('不能重复选择同一单据');
+ const old=voucher.entryAttachments||[];
+ const current=new Set(old.filter(link=>link.entryIndex===entryIndex).map(link=>link.documentId));
+ const docs=documentIds.map(id=>state.documents.find(doc=>doc.id===id));
+ if(docs.some(doc=>!doc||isDocumentLocked(doc)||(doc.status==='matched'&&!current.has(doc.id))))throw new Error('单据已被其他分录关联或已锁定，不能重复绑定');
+ if(docs.some(doc=>doc?.extractionStatus==='pending'&&doc.sourceKind!=='pdf-text'))throw new Error('请先对照原件补录并复核单据字段');
+ const sum=(docs as SourceDocument[]).reduce((total,doc)=>total+amountCents(doc.amount),0);
+ if(documentIds.length&&sum!==money.cents)throw new Error('所选附件金额合计必须与本条分录金额完全一致');
+ detachNameAssociations(state,[voucher.id],documentIds);
+ for(const link of old.filter(link=>link.entryIndex===entryIndex)){const doc=state.documents.find(doc=>doc.id===link.documentId);if(doc){clearReceiptReference(doc);doc.status='pending';doc.matchReviewRequired=true;doc.lastMatchReason='分录附件已解除，请人工复核后重新关联';}}
+ voucher.entryAttachments=[...old.filter(link=>link.entryIndex!==entryIndex),...documentIds.map(documentId=>({entryIndex,documentId,side:money.side,ruleId:'MANUAL' as const,reason:reason.trim()}))];
+ voucher.documentIds=[...new Set(voucher.entryAttachments.map(link=>link.documentId))];
+ for(const doc of docs as SourceDocument[]){doc.status='matched';doc.matchReviewRequired=false;doc.lastMatchReason=`已人工核对凭证${voucher.no}第${entryIndex+1}条分录：${reason.trim()}`;writeReceiptReference(doc,voucher,entryIndex);}
+ const complete=attachmentCoverage(voucher);voucher.status=complete?'matched':'pending';voucher.attachmentReviewRequired=!complete;voucher.matchReviewRequired=!complete;voucher.ruleId=voucher.entryAttachments.every(link=>link.ruleId==='MANUAL')?'MANUAL':'R09';voucher.confidence=100;
+ voucher.lastMatchReason=complete?'已按分录完成人工附件复核':'已有分录完成关联，其余分录请复核';
+ bumpMatchDataRevision();rebuildPayerGroups();log('分录附件复核',`${voucher.no} 第${entryIndex+1}条摘要关联 ${documentIds.length} 份单据；依据：${reason.trim()}`);
+}
+
 async function autoMatch(period?: string): Promise<{ matched: number; remaining: number; grouped:number }> {
+ if(state.rules.some(rule=>rule.id===RECEIPT_RULE_ID))return autoMatchEntries(period);
  if(matching||writing)throw new Error('其他数据操作正在执行，请稍候');matching=true;
  try{
   await refreshDocumentParties();
@@ -491,6 +619,9 @@ function markMissing(voucherId: string, reason: string): void {
 function updateRule(ruleId: string, patch: Partial<MatchRule>): void {
   const rule = state.rules.find(r => r.id === ruleId);
   if (!rule) throw new Error('规则不存在');
+  if(ruleId===RECEIPT_RULE_ID){
+    if((patch.tolerance!==undefined&&patch.tolerance!==0)||(patch.dateWindow!==undefined&&patch.dateWindow!==30)||(patch.matchType!==undefined&&patch.matchType!=='exact')||patch.conditions?.requireAmount===false||patch.conditions?.requireDate===false||patch.conditions?.associationScope==='party')throw new Error('逐行匹配固定要求金额完全一致、收款账号命中、日期差小于30天');
+  }
   const next = { ...rule, ...patch };
   if (!Number.isFinite(next.threshold) || next.threshold < 0 || next.threshold > 100) throw new Error('阈值必须在 0 至 100 之间');
   if (next.tolerance < 0 || amountCents(next.tolerance) > 10000) throw new Error('金额容差需为 0 至 100 元');
@@ -525,8 +656,18 @@ function generateArchive(request: GenerateArchiveRequest): ArchiveBook {
     if (!docs.length || docs.some(doc => !doc)) throw new Error(`${voucher.no} 附件缺失`);
     if (voucher.expectedAttachments !== undefined && docs.length !== voucher.expectedAttachments) throw new Error(`${voucher.no} 附件数量不符`);
     if (docs.some(doc => doc!.type === 'invoice' && !doc!.seal)) throw new Error(`${voucher.no} 存在未确认发票章的单据`);
-    const sum = docs.reduce((total, doc) => total + amountCents(doc!.amount), 0);
-    if (Math.abs(sum - amountCents(voucher.amount)) > 5) throw new Error(`${voucher.no} 附件金额不一致`);
+    if(voucher.entryAttachments?.length){
+      if(!attachmentCoverage(voucher)||voucher.attachmentReviewRequired)throw new Error(`${voucher.no} 仍有分录附件需要复核`);
+      if(voucher.documentIds.length!==voucher.entryAttachments.length||new Set(voucher.entryAttachments.map(link=>link.documentId)).size!==voucher.entryAttachments.length)throw new Error(`${voucher.no} 分录附件关系不完整或重复`);
+      for(const entryIndex of new Set(voucher.entryAttachments.map(link=>link.entryIndex))){
+        const entry=voucher.entries?.[entryIndex],money=entry&&entryMoney(entry);
+        const total=voucher.entryAttachments.filter(link=>link.entryIndex===entryIndex).reduce((sum,link)=>sum+amountCents(state.documents.find(doc=>doc.id===link.documentId)?.amount),0);
+        if(!money||money.cents!==total)throw new Error(`${voucher.no} 第${entryIndex+1}条分录附件金额不一致`);
+      }
+    }else{
+      const sum = docs.reduce((total, doc) => total + amountCents(doc!.amount), 0);
+      if (Math.abs(sum - amountCents(voucher.amount)) > 5) throw new Error(`${voucher.no} 附件金额不一致`);
+    }
   }
   const [year, month] = request.period.split('-');
   const archive: ArchiveBook = { id: id('archive'), title: `${year}年${month}月会计凭证`, period: request.period, startVoucherNo: request.startVoucherNo, endVoucherNo: request.endVoucherNo, voucherCount: vouchers.length, pageCount: vouchers.length + vouchers.reduce((total, v) => total + v.documentIds.length, 0) + 2, amount: vouchers.reduce((total, v) => total + amountCents(v.amount), 0) / 100, createdAt: localTime(), status: 'locked' };
@@ -562,5 +703,5 @@ async function resetData():Promise<void>{
 }
 
 export function useArchiveStore() {
-  return { state, storageError, refreshDocumentParties:()=>write(()=>refreshDocumentParties()), importMixedBatch:(vouchers:VoucherDraft[],documents:DocumentDraft[])=>write(()=>importMixedBatch(vouchers,documents)), importVouchers:(file:File)=>write(()=>importVouchers(file)), importVoucherBatch:(drafts:VoucherDraft[])=>write(()=>importVoucherBatch(drafts)), addDocument:(file:File,fields:Partial<SourceDocument>={})=>write(()=>addDocument(file,fields)), addDocumentBatch:(drafts:DocumentDraft[])=>write(()=>addDocumentBatch(drafts)), deleteVouchers:(ids:string[])=>write(()=>deleteVouchers(ids)), deleteDocuments:(ids:string[])=>write(()=>deleteDocuments(ids)), updateVoucher:(id:string,values:Record<string,unknown>)=>syncWrite(()=>updateVoucher(id,values)), updateDocument:(id:string,fields:DocumentDraft['fields'])=>syncWrite(()=>updateDocument(id,fields)), restoreMissing:(id:string)=>syncWrite(()=>restoreMissing(id)), isVoucherLocked, isDocumentLocked, unmatchVoucher:(id:string,reason:string)=>syncWrite(()=>unmatchVoucher(id,reason)), confirmSeal:(id:string)=>syncWrite(()=>confirmSeal(id)), autoMatch, manualMatch:(id:string,ids:string[],reason:string)=>syncWrite(()=>manualMatch(id,ids,reason)), markMissing:(id:string,reason:string)=>syncWrite(()=>markMissing(id,reason)), updateRule:(id:string,patch:Partial<MatchRule>)=>syncWrite(()=>updateRule(id,patch)), generateArchive:(request:GenerateArchiveRequest)=>syncWrite(()=>generateArchive(request)), resetData:()=>write(()=>resetData()) };
+  return { state, storageError, refreshDocumentParties:()=>write(async()=>{const count=await refreshDocumentParties();await refreshDocumentAccounts();return count;}), reconcileEntry:(id:string,index:number,ids:string[],reason:string)=>syncWrite(()=>reconcileEntry(id,index,ids,reason)), importMixedBatch:(vouchers:VoucherDraft[],documents:DocumentDraft[])=>write(()=>importMixedBatch(vouchers,documents)), importVouchers:(file:File)=>write(()=>importVouchers(file)), importVoucherBatch:(drafts:VoucherDraft[])=>write(()=>importVoucherBatch(drafts)), addDocument:(file:File,fields:Partial<SourceDocument>={})=>write(()=>addDocument(file,fields)), addDocumentBatch:(drafts:DocumentDraft[])=>write(()=>addDocumentBatch(drafts)), deleteVouchers:(ids:string[])=>write(()=>deleteVouchers(ids)), deleteDocuments:(ids:string[])=>write(()=>deleteDocuments(ids)), updateVoucher:(id:string,values:Record<string,unknown>)=>syncWrite(()=>updateVoucher(id,values)), updateDocument:(id:string,fields:DocumentDraft['fields'])=>syncWrite(()=>updateDocument(id,fields)), restoreMissing:(id:string)=>syncWrite(()=>restoreMissing(id)), isVoucherLocked, isDocumentLocked, unmatchVoucher:(id:string,reason:string)=>syncWrite(()=>unmatchVoucher(id,reason)), confirmSeal:(id:string)=>syncWrite(()=>confirmSeal(id)), autoMatch, manualMatch:(id:string,ids:string[],reason:string)=>syncWrite(()=>manualMatch(id,ids,reason)), markMissing:(id:string,reason:string)=>syncWrite(()=>markMissing(id,reason)), updateRule:(id:string,patch:Partial<MatchRule>)=>syncWrite(()=>updateRule(id,patch)), generateArchive:(request:GenerateArchiveRequest)=>syncWrite(()=>generateArchive(request)), resetData:()=>write(()=>resetData()) };
 }

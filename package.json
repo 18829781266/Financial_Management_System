@@ -1,6 +1,6 @@
 {
   "name": "huitong-electronic-archive",
-  "version": "1.0.0",
+  "version": "2.7.0",
   "private": true,
   "scripts": {
     "dev": "npm --prefix frontend run preview",

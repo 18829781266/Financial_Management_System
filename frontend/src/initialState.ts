@@ -1,10 +1,12 @@
 import type {ArchiveState} from './types';
 import {nameAssociationRule} from './nameAssociation';
+import {receiptEntryRule} from './entryAttachments';
 
 /** 默认仅保留系统规则，业务数据始终从空白开始。 */
 export function emptyArchiveState():ArchiveState {
  return {lastImportSequence:0,matchDataRevision:0,vouchers:[],documents:[],archives:[],logs:[],payerGroups:[],nameAssociations:[],lastMatchRun:undefined,
     rules: [
+      receiptEntryRule(),
       { id: 'R01', name: '发票号码精确匹配', description: '发票号码一致，校验金额容差后自动关联', priority: 1, enabled: true, threshold: 95, tolerance: 0.05, dateWindow: 30, matchType: 'exact' },
       { id: 'R02', name: '合同编号精确匹配', description: '以合同编号建立凭证与合同的关联', priority: 2, enabled: true, threshold: 95, tolerance: 0.05, dateWindow: 90, matchType: 'exact' },
       { id: 'R03', name: '银行流水号精确匹配', description: '核对银行流水号及收付款金额', priority: 3, enabled: true, threshold: 95, tolerance: 0.05, dateWindow: 7, matchType: 'exact' },

@@ -27,7 +27,7 @@ const payer=(document:SourceDocument)=>document.payerName??document.supplier;
 // 因此不能直接信任分组中的 documentIds / voucherIds 作为归档依据。
 const archivedVouchers=computed(()=>{
  const matchedDocuments=new Set(props.documents.filter(document=>document.status==='matched').map(document=>document.id));
- return props.vouchers.filter(voucher=>voucher.status==='matched'&&voucher.documentIds.length>0&&voucher.documentIds.every(id=>matchedDocuments.has(id)));
+ return props.vouchers.filter(voucher=>(voucher.status==='matched'||!!voucher.entryAttachments?.length)&&voucher.documentIds.length>0&&voucher.documentIds.every(id=>matchedDocuments.has(id)));
 });
 const archiveGroups=computed(()=>props.groups.flatMap(group=>{
  if(group.associationType==='name'){
@@ -37,7 +37,7 @@ const archiveGroups=computed(()=>props.groups.flatMap(group=>{
  }
  const vouchers=archivedVouchers.value.filter(voucher=>voucher.period===group.period&&voucher.documentIds.some(id=>group.documentIds.includes(id)));
  const relatedIds=new Set(vouchers.flatMap(voucher=>voucher.documentIds));
- const documentIds=group.documentIds.filter(id=>relatedIds.has(id)&&props.documents.some(document=>document.id===id&&document.status==='matched'&&document.date.startsWith(group.period)));
+ const documentIds=group.documentIds.filter(id=>relatedIds.has(id)&&props.documents.some(document=>document.id===id&&document.status==='matched'));
  return documentIds.length&&vouchers.length?[{...group,payerName:group.needsPayerReview?'付款人未录入':group.payerName,documentIds,voucherIds:vouchers.map(voucher=>voucher.id)}]:[];
 }));
 const filteredGroups=computed(()=>{
@@ -85,12 +85,12 @@ watch(()=>matchedVouchers.value.map(voucher=>voucher.id).join('|'),()=>{
 watch(previewKey,()=>{currentPage.value=0;totalPages.value=records.value.length;});
 function jumpToPreview(){previewSection.value?.scrollIntoView({behavior:window.matchMedia('(prefers-reduced-motion: reduce)').matches?'auto':'smooth',block:'start'});}
 function groupCount(group:PayerGroup){return group.documentIds.filter(id=>props.documents.some(document=>document.id===id)).length;}
-function voucherCount(group:PayerGroup){return group.voucherIds.filter(id=>props.vouchers.some(voucher=>voucher.id===id&&(voucher.status==='matched'||voucher.nameAssociationIds?.includes(group.id)))).length;}
+function voucherCount(group:PayerGroup){return group.voucherIds.filter(id=>props.vouchers.some(voucher=>voucher.id===id&&(voucher.status==='matched'||voucher.entryAttachments?.length||voucher.nameAssociationIds?.includes(group.id)))).length;}
 </script>
 
 <template>
  <section class="matched-archive-panel">
-  <div v-if="archiveGroups.length" class="draft-notice"><FolderArchive :size="21"/><div><strong>已关联数据已同步展示</strong><p>按付款 / 收款企业名称或已核对的凭证关系展示原件；名称关联保留单位归属依据，正式档案册仍需完成凭证金额、附件及印章校验。</p></div><span class="status matched">已匹配归档</span></div>
+  <div v-if="archiveGroups.length" class="draft-notice"><FolderArchive :size="21"/><div><strong>已关联数据已同步展示</strong><p>按分录金额、收款账号及日期核对附件；部分关联的凭证仍需人工复核，完成后可生成正式档案册。</p></div><span class="status matched">已匹配归档</span></div>
   <div v-if="run&&archiveGroups.length" class="match-run-summary"><span><GitBranch :size="16"/>最近执行 {{run.time}}</span><span>已匹配归档 <b>{{archivedDocumentCount}}</b> 份单据</span><span>已关联归档 <b>{{archiveGroups.length}}</b> 组</span></div>
   <div v-if="!archiveGroups.length" class="draft-empty"><FeatureIcon name="archives" :size="82"/><h3>暂无已匹配归档数据</h3><p>请先点击“开始自动匹配”。未关联的数据留在复核池，人工复核并完成关联后才会展示。</p><button class="btn primary" @click="emit('match')"><GitBranch :size="16"/>前往智能匹配</button></div>
   <div v-else class="draft-layout">
@@ -106,20 +106,20 @@ function voucherCount(group:PayerGroup){return group.voucherIds.filter(id=>props
      <div class="linked-voucher-list" role="list" aria-label="已匹配归档凭证">
       <div v-for="voucher in pagedVouchers" :key="voucher.id" :class="['linked-voucher',{'is-selected':selectedVoucherId===voucher.id}]" role="listitem">
        <button :class="['voucher-number',{chosen:selectedVoucherId===voucher.id}]" :title="voucher.no" @click="selectedVoucherId=voucher.id"><FileText :size="16"/>{{voucher.no}}</button>
-       <span class="voucher-rule">{{voucher.status==='matched'?voucher.ruleId||'手工关联':selectedGroup.ruleId+' · 名称关联'}}</span>
+       <span class="voucher-rule">{{voucher.entryAttachments?.length?(voucher.attachmentReviewRequired?'部分关联 · 请复核':voucher.ruleId||'分录关联'):voucher.status==='matched'?voucher.ruleId||'手工关联':selectedGroup.ruleId+' · 名称关联'}}</span>
        <strong class="voucher-amount">¥ {{money(voucher.amount)}}</strong>
        <div class="linked-voucher-actions">
         <button v-if="voucher.reviewStatus==='pending'" class="text-link review-link" @click="emit('review',voucher)">核对字段</button>
         <button class="text-link" @click="emit('view',voucher)">查看原件</button>
         <button v-if="voucher.status==='matched'" class="btn" @click="emit('generate',voucher)">生成正式档案册</button>
-        <button v-else class="btn" @click="emit('reconcile',voucher)">核对凭证附件</button>
+        <button class="btn" @click="emit('reconcile',voucher)">核对凭证附件</button>
        </div>
       </div>
      </div>
      <div class="archive-list-footer"><span>共 {{matchedVouchers.length}} 张凭证</span><el-pagination v-if="matchedVouchers.length>listPageSize" class="voucher-pagination" v-model:current-page="voucherListPage" :page-size="listPageSize" :total="matchedVouchers.length" :pager-count="5" layout="prev, pager, next" size="small" aria-label="关联凭证分页"/></div>
     </section>
     <div class="draft-section-title documents-heading"><h4><FileText :size="17"/>已关联单据 <span class="section-count">{{groupDocuments.length}}</span></h4><span>付款人名称取自原始单据</span></div>
-    <el-table :data="pagedDocuments" row-key="id" class="draft-documents" size="default" :max-height="360"><el-table-column label="单据 / 编号" min-width="230"><template #default="{row}"><button class="draft-document-name" :title="row.name" @click="emit('view',row)">{{row.name}}</button><small class="document-number">{{row.number||'编号未录入'}}</small></template></el-table-column><el-table-column label="类型" width="112"><template #default="{row}">{{typeLabel(row.type)}}</template></el-table-column><el-table-column label="付款人（客商）" min-width="190"><template #default="{row}"><span class="party-name">{{payer(row)||'未录入'}}</span></template></el-table-column><el-table-column label="收款人" min-width="190"><template #default="{row}">{{row.payeeName||'未录入'}}</template></el-table-column><el-table-column prop="date" label="日期" width="125"/><el-table-column label="金额（元）" width="145" align="right"><template #default="{row}"><span class="amount-cell">{{money(row.amount)}}</span></template></el-table-column><el-table-column label="匹配状态" width="135"><template #default><span class="status matched">已匹配归档</span></template></el-table-column><el-table-column label="操作" width="170"><template #default="{row}"><button class="text-link" @click="emit('view',row)">查看原件</button><button v-if="row.extractionStatus==='pending'" class="text-link review-link" @click="emit('review',row)">核对字段</button></template></el-table-column></el-table>
+    <el-table :data="pagedDocuments" row-key="id" class="draft-documents" size="default" :max-height="360"><el-table-column label="单据 / 编号" min-width="230"><template #default="{row}"><button class="draft-document-name" :title="row.name" @click="emit('view',row)">{{row.name}}</button><small class="document-number">{{row.number||'编号未录入'}}</small></template></el-table-column><el-table-column label="类型" width="112"><template #default="{row}">{{typeLabel(row.type)}}</template></el-table-column><el-table-column label="付款人（客商）" min-width="190"><template #default="{row}"><span class="party-name">{{payer(row)||'未录入'}}</span></template></el-table-column><el-table-column label="收款人" min-width="190"><template #default="{row}">{{row.payeeName||'未录入'}}</template></el-table-column><el-table-column label="收款账号" min-width="170"><template #default="{row}">{{row.payeeAccount||'未录入'}}</template></el-table-column><el-table-column prop="date" label="日期" width="125"/><el-table-column label="备注" min-width="220"><template #default="{row}"><span style="white-space:pre-wrap">{{row.remarks||'—'}}</span></template></el-table-column><el-table-column label="金额（元）" width="145" align="right"><template #default="{row}"><span class="amount-cell">{{money(row.amount)}}</span></template></el-table-column><el-table-column label="匹配状态" width="135"><template #default><span class="status matched">已匹配归档</span></template></el-table-column><el-table-column label="操作" width="170"><template #default="{row}"><button class="text-link" @click="emit('view',row)">查看原件</button><button v-if="row.extractionStatus==='pending'" class="text-link review-link" @click="emit('review',row)">核对字段</button></template></el-table-column></el-table>
     <div class="archive-list-footer documents-footer"><span>共 {{groupDocuments.length}} 份单据</span><el-pagination v-if="groupDocuments.length>listPageSize" class="document-pagination" v-model:current-page="documentListPage" :page-size="listPageSize" :total="groupDocuments.length" :pager-count="5" layout="prev, pager, next" size="small" aria-label="关联单据分页"/></div>
     <section v-if="records.length" ref="previewSection" class="draft-preview"><div class="draft-preview-heading"><div><h4><BookOpen :size="17"/>原始单据预览</h4><p>直接翻阅上传的 PDF / 图片，保留各银行原始版式；多页原件按页展示。</p></div><el-select v-if="matchedVouchers.length" v-model="selectedVoucherId" aria-label="已关联档案预览范围" style="width:215px"><el-option :label="selectedGroup.associationType==='name'?'企业全部凭证与单据':'全部已关联单据'" value=""/><el-option v-for="voucher in matchedVouchers" :key="voucher.id" :label="voucher.no+(voucher.status==='matched'?' · 凭证及附件':' · 原始凭证')" :value="voucher.id"/></el-select><span v-else class="draft-tag">全部 {{groupDocuments.length}} 份已关联原件</span></div>
      <div class="draft-flip-container"><FlipBook :key="previewKey" ref="book" :title="selectedGroup.payerName+' · 已匹配归档'" :period="selectedGroup.period" :records="records" @page-change="event=>{currentPage=event.page;totalPages=event.total}"/></div>

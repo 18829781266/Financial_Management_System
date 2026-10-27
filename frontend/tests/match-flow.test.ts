@@ -146,12 +146,12 @@ describe('复核、删除与档案工作稿持续同步',()=>{
   store.updateDocument(d.id,{...pdfDocument().fields,payerName:'合成新付款企业有限公司',supplier:'合成新付款企业有限公司'});
   expect(groups()).toEqual([]);expect(d.payerGroupId).toBeUndefined();expect(d.payerName).toBe('合成新付款企业有限公司');expect(d.extractionStatus).toBe('reviewed');expect(collectionStatus(d)).toBe('review');
  });
- it('归集与运行结果持久化，刷新恢复后再次运行不重复消费',async()=>{
+ it('旧版关系刷新恢复后按新增逐行联合条件重新复核',async()=>{
   await importPair();await store.autoMatch(period);await nextTick();
   const saved=JSON.parse(memory.get('langchao-cloud-demo-v1')!);expect(saved.payerGroups.filter((group:{period:string})=>group.period===period)).toHaveLength(1);expect(saved.lastMatchRun.matched).toBe(1);expect(saved.lastMatchRun.outcomes[0].matched).toBe(true);
   vi.resetModules();store=(await import('../src/store')).useArchiveStore();
   expect(groups()).toHaveLength(1);expect(voucher().status).toBe('matched');expect(document().status).toBe('matched');expect(store.state.lastMatchRun?.groupCount).toBe(1);
-  expect((await store.autoMatch(period)).matched).toBe(0);expect(voucher().documentIds).toEqual([document().id]);expect(groups()[0]?.voucherIds).toEqual([voucher().id]);
+  expect(store.state.rules.some(rule=>rule.id==='R09')).toBe(true);expect((await store.autoMatch(period)).matched).toBe(0);expect(voucher().documentIds).toEqual([]);expect(collectionStatus(voucher())).toBe('review');expect(groups()).toEqual([]);
  });
  it('清空数据删除匹配运行和工作稿',async()=>{
   await importPair();await store.autoMatch(period);await store.resetData();expect(store.state.lastMatchRun).toBeUndefined();expect(store.state.payerGroups).toEqual([]);

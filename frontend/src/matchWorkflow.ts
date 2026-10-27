@@ -7,6 +7,7 @@ export type CollectionStatus='pending'|'matched'|'review';
  * 也只显示待匹配；执行匹配后未关联的记录才进入请复核，复核保存不等于关联。
  */
 export function collectionStatus(record:Voucher|SourceDocument):CollectionStatus {
+ if('no' in record&&record.attachmentReviewRequired)return 'review';
  if(record.status==='matched'||record.nameAssociationIds?.length)return 'matched';
  return record.matchReviewRequired||record.status==='missing'?'review':'pending';
 }

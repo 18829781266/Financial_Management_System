@@ -1,6 +1,9 @@
 /** 浏览器本地数据；生产持久化及并发控制由 Java 服务端负责。 */
 export interface VoucherEntry {summary:string;account:string;debit:string;credit:string;sourcePage?:number}
 
+/** 附件绑定到实际分录下标，不能把整张凭证的附件重复展示到每条摘要。 */
+export interface EntryAttachment {entryIndex:number;documentId:string;side:'debit'|'credit';ruleId:'R09'|'MANUAL';reason?:string}
+
 export interface Voucher {
   /** 企业名称关联独立保存，不能当作已通过金额核对的凭证附件关系。 */
   nameAssociationIds?:string[];
@@ -32,6 +35,8 @@ export interface Voucher {
   sourcePages?: number[];
   company?: string;
   entries?: VoucherEntry[];
+  entryAttachments?: EntryAttachment[];
+  attachmentReviewRequired?: boolean;
   /** 文字层提取后必须经过人工核对，不能直接当成已复核凭证。 */
   reviewStatus?: 'pending' | 'reviewed';
   reviewReasons?: string[];
@@ -56,6 +61,15 @@ export interface SourceDocument {
   partyVersion?: number;
   bankNo?: string;
   receiptNo?: string;
+  /** 账号始终使用文本，保留前导零；与银行流水号分别保存。 */
+  payerAccount?: string;
+  payeeAccount?: string;
+  accountVersion?: number;
+  remarks?: string;
+  matchRemark?: string;
+  matchedVoucherId?: string;
+  matchedVoucherNo?: string;
+  matchedEntryIndex?: number;
   legacyCounterparty?: string;
   payerGroupId?: string;
   amount: number;

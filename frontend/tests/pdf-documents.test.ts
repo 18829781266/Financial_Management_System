@@ -9,6 +9,20 @@ function invoice():PdfTextPage{return page([
  item('合计',30,560),item('¥100.00',380,560),item('¥13.00',530,560),item('价税合计（大写）',30,530),item('（小写）',400,530,40),item('¥113.00',450,530),
  ]);}
 describe('文字型原始单据PDF解析',()=>{
+ it('独立读取双栏收付款账号，保留前导零，不把付款账号当收款账号',()=>{
+  const result=parseDocumentPages([page([item('网上银行电子回单',180,790,200),item('付款人',25,730,30),item('收款人',310,730,30),item('账号',70,710,25),item('0123456789012345',110,710,140),item('账号',350,710,25),item('04536101040033325',390,710,150)])])[0]!;
+  expect(result.payerAccount).toBe('0123456789012345');expect(result.payeeAccount).toBe('04536101040033325');expect(result.accountVersion).toBe(1);
+ });
+ it('明确收款账号标签优先角色，不依左右位置或流水号猜账号',()=>{
+  const result=parseDocumentPages([page([item('网上银行电子回单',180,790,200),item('收款人账号：０４５３６１０１０４００３３３２５',30,740,260),item('付款人账号：622200001234',320,710,220),item('流水号：999999990000',30,690,200)])])[0]!;
+  expect(result.payeeAccount).toBe('04536101040033325');expect(result.payerAccount).toBe('622200001234');
+ });
+ it('只有付款账号或同角色存在多个账号时收款账号保持未知',()=>{
+  const onlyPayer=parseDocumentPages([page([item('网上银行电子回单',180,790,200),item('付款人账号：622200001234',30,740,240),item('流水号：1234567890',30,710,200)])])[0]!;
+  expect(onlyPayer.payeeAccount).toBe('');expect(onlyPayer.reviewReasons.join('')).toContain('收款账号');
+  const multiple=parseDocumentPages([page([item('网上银行电子回单',180,790,200),item('收款账号：622200001234',30,740,240),item('收款账号：622200009999',30,710,240)])])[0]!;
+  expect(multiple.payeeAccount).toBe('');
+ });
  it('保留长发票编号和价税合计，客商使用购买方即付款人',()=>{
   const result=parseDocumentPages([invoice()],'示例采购有限公司')[0]!;
   expect(result.number).toBe('26000000000000000123');expect(result.amount).toBe('113.00');expect(result.date).toBe('2026-06-30');expect(result.supplier).toBe('示例采购有限公司');expect(result.payerName).toBe('示例采购有限公司');expect(result.payeeName).toBe('示例销售有限公司');

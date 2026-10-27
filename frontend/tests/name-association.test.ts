@@ -108,10 +108,10 @@ describe('名称关联的状态、档案与凭证金额边界',()=>{
   expect(store.state.nameAssociations?.[0]?.ruleId).toBe('R08');expect(store.state.nameAssociations?.[0]?.documentIds).toEqual([doc.id]);expect(store.state.vouchers.find(item=>item.id===voucher.id)?.documentIds).toEqual([]);expect(store.state.documents.find(item=>item.id===doc.id)?.amount).toBe(999);
   expect(collectionStatus(store.state.documents.find(item=>item.id===doc.id)!)).toBe('matched');
  });
- it('升级旧规则时追加名称规则但不自动关联，已有数据点击后无需重导',async()=>{
+ it('升级旧规则加入逐行联合规则，缺少账号时不再仅按名称关联',async()=>{
   await pair();await nextTick();const saved=JSON.parse(memory.get('langchao-cloud-demo-v1')!);saved.rules=saved.rules.filter((rule:MatchRule)=>rule.id!=='R08');delete saved.nameAssociations;memory.set('langchao-cloud-demo-v1',JSON.stringify(saved));
   vi.resetModules();store=(await import('../src/store')).useArchiveStore();expect(store.state.rules.find(rule=>rule.id==='R08')?.enabled).toBe(true);expect(store.state.nameAssociations).toEqual([]);
-  expect(collectionStatus(store.state.vouchers.find(item=>item.no==='名称-1')!)).toBe('pending');await store.autoMatch(period);expect(store.state.nameAssociations?.[0]?.documentIds).toHaveLength(1);
+  expect(store.state.rules.find(rule=>rule.id==='R09')?.enabled).toBe(true);expect(collectionStatus(store.state.vouchers.find(item=>item.no==='名称-1')!)).toBe('pending');await store.autoMatch(period);expect(store.state.nameAssociations).toEqual([]);expect(collectionStatus(store.state.vouchers.find(item=>item.no==='名称-1')!)).toBe('review');
  });
  it('更改名称字段后刷新保留执行快照，只有重新运行才按新配置重算',async()=>{
   await store.importVoucherBatch([{values:values()}]);const doc=await store.addDocument(file(),fields('PAYEE',{payerName:other,payeeName:company}));await store.autoMatch(period);

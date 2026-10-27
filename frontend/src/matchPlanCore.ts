@@ -1,5 +1,6 @@
 import {evaluateRules} from './matchingEngine';
 import {evaluateNameAssociations} from './nameAssociation';
+import {evaluateEntryAttachments,RECEIPT_RULE_ID} from './entryAttachments';
 import type {RuleEvaluation} from './matchingEngine';
 import type {MatchRule,NameAssociation,SourceDocument,Voucher} from './types';
 
@@ -12,6 +13,10 @@ export type MatchEvaluationResponse={ok:true;plan:MatchPlan}|{ok:false;message:s
  * 最后计算企业名称关联，保持现有“财务匹配优先”的顺序，绝不修改传入记录。
  */
 export function computeMatchPlan(input:MatchEvaluationInput):MatchPlan {
+ const receiptRule=input.rules.find(rule=>rule.id===RECEIPT_RULE_ID);
+ // 升级后的工作空间由恢复逻辑加入R09。旧纯计算调用仍可使用旧规则，
+ // 当前模式停用R09只暂停匹配，绝不回退到企业名称关联。
+ if(receiptRule)return {financial:evaluateEntryAttachments(input.vouchers,input.documents,receiptRule),names:[]};
  const financial=evaluateRules(input.vouchers,input.documents,input.rules);
  const byVoucher=new Map(financial.matches.map(match=>[match.voucherId,match]));
  const consumed=new Set(financial.matches.flatMap(match=>match.documentIds));
