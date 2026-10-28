@@ -37,6 +37,13 @@ describe('逐行回单关联的完整数据流',()=>{
  it('金额与账号不符不能被企业名称规则兜底',async()=>{
   const v=await addVoucher(),d=await addDocument('BAD',300,'622200009999');await store.autoMatch();expect(v.documentIds).toEqual([]);expect(d.status).toBe('pending');expect(store.state.nameAssociations).toEqual([]);
  });
+ it('R09运行不匹配也不改写非银行单据的状态和复核原因',async()=>{
+  const v=await addVoucher();
+  const invoice=await store.addDocument(image('invoice.pdf'),{number:'INV-1',type:'invoice',supplier:'测试付款人',payerName:'测试付款人',payeeName:'测试收款人',date:'2026-10-01',amount:100,payeeAccount:'04536101040033325',seal:true,extractionStatus:'reviewed'});
+  invoice.matchReviewRequired=false;invoice.lastMatchReason='发票原有复核说明';
+  await store.autoMatch('2026-09');
+  expect(v.documentIds).toEqual([]);expect(invoice.status).toBe('pending');expect(invoice.matchReviewRequired).toBe(false);expect(invoice.lastMatchReason).toBe('发票原有复核说明');expect(invoice.matchedVoucherNo).toBeUndefined();
+ });
  it('人工复核只修改指定摘要，账号日期例外留痕并回写备注',async()=>{
   const v=await addVoucher(),d1=await addDocument(),d2=await addDocument('MANUAL',200,'622200009999','2026-11-01');await store.autoMatch();
   store.reconcileEntry(v.id,1,[d2.id],'核对原件确认该科目未印账号，跨月补回单');

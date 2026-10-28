@@ -4,6 +4,7 @@ import type {RuleEvaluation,RuleMatch} from './matchingEngine';
 
 export const RECEIPT_RULE_ID='R09';
 export const ACCOUNT_TAIL_LENGTH=4;
+export const FULL_ACCOUNT_MIN_LENGTH=8;
 export const RECEIPT_DATE_WINDOW=30;
 export function receiptEntryRule():MatchRule {
  return {id:RECEIPT_RULE_ID,name:'金额＋收款账号尾号逐行匹配',description:'回单金额与分录金额完全一致，收款账号或尾号在科目中，日期差严格小于30天；歧义交人工复核',priority:1,enabled:true,threshold:100,tolerance:0,dateWindow:30,matchType:'exact',conditions:{associationScope:'voucher',documentTypes:['bank'],requireAmount:true,requireDate:true}};
@@ -19,7 +20,18 @@ export function normalizeBankAccount(value:unknown):string {
 }
 export function subjectAccounts(subject:string):string[] {
  const text=String(subject||'').normalize('NFKC').replace(/^\s*\d{4,}(?:\.\d+)*(?=\s|[\u4e00-\u9fff_])/,'');
- return [...new Set((text.match(/[\d*Xx•·●][\d*Xx•·● -]{2,}[\d*Xx•·●]/g)||[]).map(normalizeBankAccount).filter(Boolean))];
+ const marker=/(?:账号|账户|帐户|卡号|尾号|尾数)[：:#_\-‐–—\s]*$/;
+ const mask=/[*Xx•·●]/;
+ const candidates=[...text.matchAll(/[\d*Xx•·●][\d*Xx•·● \-‐–—]{2,}[\d*Xx•·●]/g)];
+ return [...new Set(candidates.flatMap(match=>{
+  const account=normalizeBankAccount(match[0]);
+  if(!account)return [];
+  // 四位短串只有在“账号/尾号”等明确语义或掩码旁才可信；
+  // 未标注的项目年份、网点号等普通数字不能冒充银行账号尾号。
+  const prefix=text.slice(0,match.index??0);
+  const explicit=marker.test(prefix),masked=mask.test(match[0]);
+  return explicit||masked||account.length>=FULL_ACCOUNT_MIN_LENGTH?[account]:[];
+ }))];
 }
 export function accountInSubject(payeeAccount:string,subject:string):boolean {
  const receipt=normalizeBankAccount(payeeAccount);
@@ -95,7 +107,11 @@ export function evaluateEntryAttachments(vouchers:Voucher[],documents:SourceDocu
    const list=byAmount.get(money.cents)||[];list.push({voucher,entryIndex,side:money.side});byAmount.set(money.cents,list);
   }
  }
+ const configuredTypes=new Set(rule.conditions?.documentTypes||['bank']);
  for(const doc of documents){
+  // R09只消费银行回单。其他单据类型由各自规则处理，不能被本规则改为复核，
+  // 即使旧数据意外带有收款账号字段也不能跨类型关联。
+  if(doc.type!=='bank'||!configuredTypes.has(doc.type))continue;
   if(doc.status==='matched'||existing.has(doc.id))continue;
   let cents:number;
   try{cents=amountCents(doc.amount);}catch{cents=0;}

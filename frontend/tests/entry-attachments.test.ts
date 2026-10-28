@@ -14,6 +14,13 @@ describe('账号与分录金额联合条件',()=>{
   expect(normalizeBankAccount('****3325')).toBe('3325');expect(normalizeBankAccount('***325')).toBe('');expect(normalizeBankAccount(4536101040033325)).toBe('');
   expect(subjectAccounts('1002 银行存款')).toEqual([]);expect(accountInSubject('04536101040033325','1002 银行存款_尾号3325')).toBe(true);
  });
+ it('普通年份或项目编号不冒充账号尾号，只接受明确语义、掩码或足够长的账号',()=>{
+  expect(subjectAccounts('1002 银行存款_项目2026')).toEqual([]);
+  expect(subjectAccounts('1002 银行存款_核算期2026')).toEqual([]);
+  expect(subjectAccounts('1002 银行存款_尾号2026')).toEqual(['2026']);
+  expect(subjectAccounts('1002 银行存款_****2026')).toEqual(['2026']);
+  expect(subjectAccounts('1002 银行存款_04536101040033325')).toEqual(['04536101040033325']);
+ });
  it('两个完整账号不一致时，尾号碰巧相同也不能关联',()=>{
   expect(accountInSubject('04536101040033325','1002 银行存款_99999999040033325')).toBe(false);
   expect(accountInSubject('04536101040033325','1002 银行存款_04536101040033325')).toBe(true);
@@ -26,7 +33,7 @@ describe('账号与分录金额联合条件',()=>{
   for(const receipt of [doc('wrong-account',100,'622200009999'),doc('wrong-amount',100.01),doc('total-amount',300)])expect(evaluate([voucher()],[receipt]).matches).toEqual([]);
  });
  it('整数分精确处理0.01与含千分位的金额',()=>{
-  const v=voucher();v.amount=0.01;v.entries=[{summary:'尾差',account:'1002 银行存款_3325',debit:'0.01',credit:'0.00'},{summary:'尾差',account:'2202 应付账款',debit:'0.00',credit:'0.01'}];
+  const v=voucher();v.amount=0.01;v.entries=[{summary:'尾差',account:'1002 银行存款_尾号3325',debit:'0.01',credit:'0.00'},{summary:'尾差',account:'2202 应付账款',debit:'0.00',credit:'0.01'}];
   expect(evaluate([v],[doc('cent',0.01)]).matches[0]!.complete).toBe(true);
  });
  it('日期差29天可匹配，正好30天和无效日期不匹配',()=>{
@@ -37,6 +44,12 @@ describe('账号与分录金额联合条件',()=>{
  it('缺少账号不得用付款企业相同或流水号代替',()=>{
   const receipt=doc();delete receipt.payeeAccount;receipt.bankNo='04536101040033325';
   const result=evaluate([voucher()],[receipt]);expect(result.matches).toEqual([]);expect(result.documentOutcomes[0]!.reason).toContain('收款账号');
+ });
+ it('R09只处理配置允许的银行回单，其他单据类型完全忽略',()=>{
+  const invoice={...doc('invoice'),type:'invoice' as const};
+  const ignored=evaluate([voucher()],[invoice]);expect(ignored.matches).toEqual([]);expect(ignored.documentOutcomes).toEqual([]);
+  const rule=receiptEntryRule();rule.conditions={...rule.conditions,documentTypes:['invoice']};
+  const disabledByType=evaluateEntryAttachments([voucher()],[doc()],rule);expect(disabledByType.matches).toEqual([]);expect(disabledByType.documentOutcomes).toEqual([]);
  });
  it('一张回单命中两张凭证或同张凭证两条分录时，均转人工',()=>{
   expect(evaluate([voucher('v1'),voucher('v2')],[doc()]).matches).toEqual([]);

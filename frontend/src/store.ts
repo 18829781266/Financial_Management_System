@@ -466,7 +466,10 @@ async function autoMatchEntries(period?:string):Promise<{matched:number;remainin
   const beforeDocumentIds=new Set(targets.flatMap(v=>v.entryAttachments||[]).map(link=>link.documentId));
   const dates=targets.map(v=>businessDate(v.date)).filter(Number.isFinite);
   const min=dates.length?Math.min(...dates)-29*86400000:NaN,max=dates.length?Math.max(...dates)+29*86400000:NaN;
-  const documents=state.documents.filter(doc=>!isDocumentLocked(doc)&&!protectedDocuments.has(doc.id)&&(!period||!doc.date||doc.date.startsWith(period)||oldDocuments.has(doc.id)||(businessDate(doc.date)>=min&&businessDate(doc.date)<=max)));
+  const configuredTypes=new Set(receiptRule.conditions?.documentTypes||['bank']);
+  // R09只管理配置允许的银行回单。发票、合同和审批单保留进入R09前的
+  // 状态与复核原因，避免本规则运行时误清理其他规则的业务结果。
+  const documents=state.documents.filter(doc=>doc.type==='bank'&&configuredTypes.has(doc.type)&&!isDocumentLocked(doc)&&!protectedDocuments.has(doc.id)&&(!period||!doc.date||doc.date.startsWith(period)||oldDocuments.has(doc.id)||(businessDate(doc.date)>=min&&businessDate(doc.date)<=max)));
   const snapshots=targets.filter(v=>!preservedIds.has(v.id)).map(v=>({...JSON.parse(JSON.stringify(v)) as Voucher,status:'pending' as const,nameAssociationIds:[],entryAttachments:(v.entryAttachments||[]).filter(link=>link.ruleId==='MANUAL'),documentIds:(v.entryAttachments||[]).filter(link=>link.ruleId==='MANUAL').map(link=>link.documentId)}));
   const sourceDocuments=documents.map(doc=>({...JSON.parse(JSON.stringify(doc)) as SourceDocument,status:'pending' as const,nameAssociationIds:[]}));
   const rules=JSON.parse(JSON.stringify(state.rules)) as MatchRule[];
