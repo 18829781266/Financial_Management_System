@@ -7,17 +7,21 @@ umask 077
 for command in curl sha256sum tar python3; do
     command -v "$command" >/dev/null || { printf '缺少必要工具：%s，请先安装后重试。\n' "$command" >&2; exit 1; }
 done
-PACKAGE_URL=https://raw.githubusercontent.com/18829781266/Financial_Management_System/main/deploy/bundles/huitong-server-98d1bda.tar.gz
-PACKAGE_SHA256=10c117ebb4d34c2898510a6633765058738d08c30a504e0c335de6a96fc46716
+PACKAGE_PART_PREFIX=https://raw.githubusercontent.com/18829781266/Financial_Management_System/main/deploy/bundles/huitong-server-007702d.tar.gz.part-
+PACKAGE_SHA256=4afe7a02b9153bc861763028920d6e9e652a427efde845499d9a4e90b9ab4f86
 download_directory=$(mktemp -d /tmp/huitong-download.XXXXXXXX)
 cleanup() { local status=$?; rm -rf -- "$download_directory"; exit "$status"; }
 trap cleanup EXIT
 trap 'exit 130' INT TERM
 
-printf '正在下载汇通云服务器安装包（源码版本98d1bda，约3.1MB）……\n'
-curl --fail --show-error --location --proto '=https' --tlsv1.2 \
-    --retry 3 --connect-timeout 15 --max-time 300 \
-    "$PACKAGE_URL" -o "$download_directory/huitong-server.tar.gz"
+printf '正在下载汇通云服务器安装包（V2.7，源码版本007702d，约3.1MB）……\n'
+: > "$download_directory/huitong-server.tar.gz"
+for suffix in 00 01 02 03 04; do
+    curl --fail --show-error --location --proto '=https' --tlsv1.2 \
+        --retry 3 --connect-timeout 15 --max-time 300 \
+        "${PACKAGE_PART_PREFIX}${suffix}" -o "$download_directory/package.part-${suffix}"
+    cat "$download_directory/package.part-${suffix}" >> "$download_directory/huitong-server.tar.gz"
+done
 printf '%s  %s\n' "$PACKAGE_SHA256" "$download_directory/huitong-server.tar.gz" | sha256sum --check --status || {
     printf '安装包SHA-256不一致，已停止安装。\n' >&2; exit 1;
 }

@@ -12,7 +12,7 @@
 
 ## 打包与安装
 
-已生成版本`98d1bda`的预构建安装包，服务器无需运行npm构建。可在腾讯云服务器的root终端执行下面的入口；它会下载约3.1MB的固定版本安装包，核对SHA-256及压缩包路径，再调用正式安装器：
+已生成V2.7源码版本`007702d`的预构建安装包，服务器无需运行npm构建。可在腾讯云服务器的root终端执行下面的入口；它会下载约3.1MB的固定版本安装包，核对SHA-256及压缩包路径，再调用正式安装器：
 
 ```sh
 curl --fail --location --proto '=https' https://raw.githubusercontent.com/18829781266/Financial_Management_System/main/deploy/bootstrap.sh -o /root/huitong-bootstrap.sh && bash /root/huitong-bootstrap.sh
@@ -20,7 +20,7 @@ curl --fail --location --proto '=https' https://raw.githubusercontent.com/188297
 
 执行前应先核对本文件的支持环境和端口要求；普通用户需将脚本下载到自己的目录并用sudo运行。脚本运行时会隐藏输入两次应用管理员初始密码。GitHub不能访问、系统不支持、端口占用或证书申请失败时会显示错误并停止，不能据此认为已部署。
 
-当前安装包：[huitong-server-98d1bda.tar.gz](bundles/huitong-server-98d1bda.tar.gz)，SHA-256：`10c117ebb4d34c2898510a6633765058738d08c30a504e0c335de6a96fc46716`。
+当前安装包在仓库中保存为`huitong-server-007702d.tar.gz.part-00`至`part-04`五个固定分片，入口脚本按顺序下载并在临时目录重组。完整包SHA-256：`4afe7a02b9153bc861763028920d6e9e652a427efde845499d9a4e90b9ab4f86`。包内`RELEASE.json`记录`applicationVersion=2.7.0`、`sourceCommit=007702d28f5b6b3e4587e237683552e7886a01e6`和`sourceDirty=false`。
 
 开发机器在仓库根目录运行：
 
