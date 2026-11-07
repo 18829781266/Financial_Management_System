@@ -1,0 +1,11 @@
+# Managed by huitong-cloud installer.
+[Unit]
+Description=汇通云服务器 IP 证书自动续期
+After=network-online.target nginx.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/huitong/certbot/bin/certbot renew --cert-name huitong-ip --config-dir /etc/huitong/letsencrypt --work-dir /var/lib/huitong-acme --logs-dir /var/log/huitong-acme --quiet --deploy-hook "/usr/sbin/nginx -t && /bin/systemctl reload nginx"
+PrivateTmp=true
+UMask=0077

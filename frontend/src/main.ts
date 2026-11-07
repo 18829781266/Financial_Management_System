@@ -1,0 +1,11 @@
+import { createApp } from 'vue';
+import ElementPlus from 'element-plus';
+import zhCn from 'element-plus/es/locale/lang/zh-cn';
+import 'element-plus/dist/index.css';
+import App from './AuthGate.vue';
+import { installButtonFeedback } from './buttonFeedback';
+import './style.css';
+import './theme.css';
+createApp(App).use(ElementPlus,{locale:zhCn}).mount('#app');
+const removeButtonFeedback = installButtonFeedback();
+if (import.meta.hot) import.meta.hot.dispose(removeButtonFeedback);

@@ -1,0 +1,12 @@
+# Managed by huitong-cloud installer.
+[Unit]
+Description=汇通云服务器 IP 证书定时检查
+
+[Timer]
+OnCalendar=*-*-* 00,06,12,18:00:00
+RandomizedDelaySec=30m
+Persistent=true
+Unit=huitong-cert-renew.service
+
+[Install]
+WantedBy=timers.target
