@@ -173,7 +173,7 @@ function openArchiveGenerator(voucher?:Voucher){
 const attachmentOpen=ref(false);
 const attachmentVoucher=ref<Voucher>();
 const attachmentReviewFields=ref(false);
-function openAttachments(voucher:Voucher,reviewFields=false){attachmentVoucher.value=voucher;attachmentReviewFields.value=reviewFields;attachmentOpen.value=true;}
+function openAttachments(voucher:Voucher,reviewFields=false){attachmentVoucher.value=voucher;attachmentReviewFields.value=reviewFields||!voucher.documentIds.length;attachmentOpen.value=true;}
 const focusVoucher = ref<Voucher>();
 const focusNameGroups=computed(()=>(state.nameAssociations||[]).filter(group=>group.voucherIds.includes(focusVoucher.value?.id||'')));
 const focusEvidenceDocuments=computed(()=>focusVoucher.value?.documentIds.flatMap(id=>{const document=state.documents.find(item=>item.id===id);return document?[document]:[];})||[]);

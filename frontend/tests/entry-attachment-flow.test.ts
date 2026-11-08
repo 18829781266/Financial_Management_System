@@ -105,4 +105,18 @@ describe('逐行回单关联的完整数据流',()=>{
   await nextTick();vi.resetModules();store=(await import('../src/store')).useArchiveStore();
   const restored=store.state.vouchers.find(item=>item.id===v.id)!;expect(restored.entryReviewNotes?.['0']).toBe('旧版人工复核依据');
  });
+ it('分录凭证确认无外部附件后显示已匹配，待处理异常凭证数量同步减少',async()=>{
+  const v=await addVoucher('记-23');v.matchReviewRequired=true;v.attachmentReviewRequired=true;
+  const before=store.state.vouchers.filter(item=>collectionStatus(item)==='review').length;expect(before).toBe(1);
+  store.confirmAttachmentExemption(v.id,'合成内部结转凭证，无外部原始单据');
+  expect(v.status).toBe('matched');expect(v.attachmentReviewRequired).toBe(false);expect(collectionStatus(v)).toBe('matched');
+  expect(store.state.vouchers.filter(item=>collectionStatus(item)==='review')).toHaveLength(before-1);
+ });
+ it('记-23人工分摊完成后退出异常复核，剩余回单额度不影响凭证匹配状态',async()=>{
+  const v=await addVoucher('记-23'),d1=await addDocument('R23-A',150),d2=await addDocument('R23-B',250,'622200007788');v.matchReviewRequired=true;
+  store.reconcileEntryAllocations(v.id,0,[{documentId:d1.id,allocatedAmount:'100.00'}],'合成记-23第一笔人工分摊');
+  store.reconcileEntryAllocations(v.id,1,[{documentId:d2.id,allocatedAmount:'200.00'}],'合成记-23第二笔人工分摊');
+  expect(v.status).toBe('matched');expect(v.attachmentReviewRequired).toBe(false);expect(collectionStatus(v)).toBe('matched');
+  expect(store.state.vouchers.filter(item=>collectionStatus(item)==='review')).toHaveLength(0);expect(d1.remainingAmount).toBe('50.00');expect(d2.remainingAmount).toBe('50.00');
+ });
 });

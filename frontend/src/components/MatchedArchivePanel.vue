@@ -5,6 +5,7 @@ import FlipBook from './FlipBook.vue';
 import FeatureIcon from './FeatureIcon.vue';
 import type {ArchiveRecord,MatchRun,PayerGroup,SourceDocument,Voucher} from '../types';
 import {latestImported} from '../recordOrder';
+import {collectionStatus,collectionStatusLabel} from '../matchWorkflow';
 
 const props=defineProps<{groups:PayerGroup[];vouchers:Voucher[];documents:SourceDocument[];run?:MatchRun;focusGroupId?:string}>();
 const emit=defineEmits<{
@@ -23,12 +24,14 @@ const book=ref<InstanceType<typeof FlipBook>>();const currentPage=ref(0);const t
 const money=(value:number)=>value.toLocaleString('zh-CN',{minimumFractionDigits:2,maximumFractionDigits:2});
 const typeLabel=(type:SourceDocument['type'])=>({invoice:'发票',bank:'银行回单',contract:'合同',approval:'审批单'}[type]);
 const payer=(document:SourceDocument)=>document.payerName??document.supplier;
-// 档案展示以实时双边关联为准。旧版本分组曾包含同付款人的未关联单据，
-// 因此不能直接信任分组中的 documentIds / voucherIds 作为归档依据。
-const archivedVouchers=computed(()=>{
- const matchedDocuments=new Set(props.documents.filter(document=>document.status==='matched').map(document=>document.id));
- return props.vouchers.filter(voucher=>(voucher.status==='matched'||!!voucher.entryAttachments?.length)&&voucher.documentIds.length>0&&voucher.documentIds.every(id=>matchedDocuments.has(id)));
-});
+// 档案展示以实时双边关联为准。部分分摊回单虽有剩余额度，已确认关系仍属于有效归档证据。
+const archivedVouchers=computed(()=>props.vouchers.filter(voucher=>{
+ if((voucher.status!=='matched'&&!voucher.entryAttachments?.length)||!voucher.documentIds.length)return false;
+ return voucher.documentIds.every(id=>{
+  const document=props.documents.find(item=>item.id===id);
+  return !!document&&(document.status==='matched'||!!voucher.entryAttachments?.some(link=>link.documentId===id));
+ });
+}));
 const archiveGroups=computed(()=>props.groups.flatMap(group=>{
  if(group.associationType==='name'){
   const voucherIds=group.voucherIds.filter(id=>props.vouchers.some(voucher=>voucher.id===id&&voucher.nameAssociationIds?.includes(group.id)));
@@ -37,7 +40,7 @@ const archiveGroups=computed(()=>props.groups.flatMap(group=>{
  }
  const vouchers=archivedVouchers.value.filter(voucher=>voucher.period===group.period&&voucher.documentIds.some(id=>group.documentIds.includes(id)));
  const relatedIds=new Set(vouchers.flatMap(voucher=>voucher.documentIds));
- const documentIds=group.documentIds.filter(id=>relatedIds.has(id)&&props.documents.some(document=>document.id===id&&document.status==='matched'));
+ const documentIds=group.documentIds.filter(id=>relatedIds.has(id)&&props.documents.some(document=>document.id===id));
  return documentIds.length&&vouchers.length?[{...group,payerName:group.needsPayerReview?'付款人未录入':group.payerName,documentIds,voucherIds:vouchers.map(voucher=>voucher.id)}]:[];
 }));
 const filteredGroups=computed(()=>{
@@ -71,7 +74,7 @@ const sums=computed(()=>{
 });
 const records=computed<ArchiveRecord[]>(()=>{
  const voucher=selectedVoucher.value;
- const documents=voucher?voucher.documentIds.flatMap(id=>{const document=props.documents.find(candidate=>candidate.id===id&&candidate.status==='matched');return document?[document]:[];}):groupDocuments.value;
+ const documents=voucher?voucher.documentIds.flatMap(id=>{const document=props.documents.find(candidate=>candidate.id===id);return document?[document]:[];}):groupDocuments.value;
  const evidence:ArchiveRecord[]=documents.map(document=>({kind:'document',no:document.number||'未录入编号',date:document.date,supplier:payer(document),amount:document.amount,summary:`${typeLabel(document.type)} · ${document.name}`,fileId:document.fileId,fileName:document.name}));
  const information=(item:Voucher):ArchiveRecord=>({kind:'voucher',no:item.no,date:item.date,supplier:item.supplier,amount:item.amount,summary:item.summary,fileId:item.fileId,fileName:item.fileName});
  if(selectedGroup.value?.associationType==='name')return voucher?[information(voucher),...evidence]:[...matchedVouchers.value.map(information),...evidence];
@@ -119,7 +122,7 @@ function voucherCount(group:PayerGroup){return group.voucherIds.filter(id=>props
      <div class="archive-list-footer"><span>共 {{matchedVouchers.length}} 张凭证</span><el-pagination v-if="matchedVouchers.length>listPageSize" class="voucher-pagination" v-model:current-page="voucherListPage" :page-size="listPageSize" :total="matchedVouchers.length" :pager-count="5" layout="prev, pager, next" size="small" aria-label="关联凭证分页"/></div>
     </section>
     <div class="draft-section-title documents-heading"><h4><FileText :size="17"/>已关联单据 <span class="section-count">{{groupDocuments.length}}</span></h4><span>付款人名称取自原始单据</span></div>
-    <el-table :data="pagedDocuments" row-key="id" class="draft-documents" size="default" :max-height="360"><el-table-column label="单据 / 编号" min-width="230"><template #default="{row}"><button class="draft-document-name" :title="row.name" @click="emit('view',row)">{{row.name}}</button><small class="document-number">{{row.number||'编号未录入'}}</small></template></el-table-column><el-table-column label="类型" width="112"><template #default="{row}">{{typeLabel(row.type)}}</template></el-table-column><el-table-column label="付款人（客商）" min-width="190"><template #default="{row}"><span class="party-name">{{payer(row)||'未录入'}}</span></template></el-table-column><el-table-column label="收款人" min-width="190"><template #default="{row}">{{row.payeeName||'未录入'}}</template></el-table-column><el-table-column label="收款账号" min-width="170"><template #default="{row}">{{row.payeeAccount||'未录入'}}</template></el-table-column><el-table-column prop="date" label="日期" width="125"/><el-table-column label="备注" min-width="220"><template #default="{row}"><span style="white-space:pre-wrap">{{row.remarks||'—'}}</span></template></el-table-column><el-table-column label="金额（元）" width="145" align="right"><template #default="{row}"><span class="amount-cell">{{money(row.amount)}}</span></template></el-table-column><el-table-column label="匹配状态" width="135"><template #default><span class="status matched">已匹配归档</span></template></el-table-column><el-table-column label="操作" width="170"><template #default="{row}"><button class="text-link" @click="emit('view',row)">查看原件</button><button v-if="row.extractionStatus==='pending'" class="text-link review-link" @click="emit('review',row)">核对字段</button></template></el-table-column></el-table>
+    <el-table :data="pagedDocuments" row-key="id" class="draft-documents" size="default" :max-height="360"><el-table-column label="单据 / 编号" min-width="230"><template #default="{row}"><button class="draft-document-name" :title="row.name" @click="emit('view',row)">{{row.name}}</button><small class="document-number">{{row.number||'编号未录入'}}</small></template></el-table-column><el-table-column label="类型" width="112"><template #default="{row}">{{typeLabel(row.type)}}</template></el-table-column><el-table-column label="付款人（客商）" min-width="190"><template #default="{row}"><span class="party-name">{{payer(row)||'未录入'}}</span></template></el-table-column><el-table-column label="收款人" min-width="190"><template #default="{row}">{{row.payeeName||'未录入'}}</template></el-table-column><el-table-column label="收款账号" min-width="170"><template #default="{row}">{{row.payeeAccount||'未录入'}}</template></el-table-column><el-table-column prop="date" label="日期" width="125"/><el-table-column label="备注" min-width="220"><template #default="{row}"><span style="white-space:pre-wrap">{{row.remarks||'—'}}</span></template></el-table-column><el-table-column label="金额（元）" width="145" align="right"><template #default="{row}"><span class="amount-cell">{{money(row.amount)}}</span></template></el-table-column><el-table-column label="匹配状态" width="135"><template #default="{row}"><span :class="['status',collectionStatus(row)]">{{collectionStatusLabel(row)}}</span><small v-if="row.remainingAmount!==undefined&&Number(row.remainingAmount)!==0" class="match-reason">剩余 ¥ {{money(row.remainingAmount)}} 待复核</small></template></el-table-column><el-table-column label="操作" width="170"><template #default="{row}"><button class="text-link" @click="emit('view',row)">查看原件</button><button v-if="row.extractionStatus==='pending'" class="text-link review-link" @click="emit('review',row)">核对字段</button></template></el-table-column></el-table>
     <div class="archive-list-footer documents-footer"><span>共 {{groupDocuments.length}} 份单据</span><el-pagination v-if="groupDocuments.length>listPageSize" class="document-pagination" v-model:current-page="documentListPage" :page-size="listPageSize" :total="groupDocuments.length" :pager-count="5" layout="prev, pager, next" size="small" aria-label="关联单据分页"/></div>
     <section v-if="records.length" ref="previewSection" class="draft-preview"><div class="draft-preview-heading"><div><h4><BookOpen :size="17"/>原始单据预览</h4><p>直接翻阅上传的 PDF / 图片，保留各银行原始版式；多页原件按页展示。</p></div><el-select v-if="matchedVouchers.length" v-model="selectedVoucherId" aria-label="已关联档案预览范围" style="width:215px"><el-option :label="selectedGroup.associationType==='name'?'企业全部凭证与单据':'全部已关联单据'" value=""/><el-option v-for="voucher in matchedVouchers" :key="voucher.id" :label="voucher.no+(voucher.status==='matched'?' · 凭证及附件':' · 原始凭证')" :value="voucher.id"/></el-select><span v-else class="draft-tag">全部 {{groupDocuments.length}} 份已关联原件</span></div>
      <div class="draft-flip-container"><FlipBook :key="previewKey" ref="book" :title="selectedGroup.payerName+' · 已匹配归档'" :period="selectedGroup.period" :records="records" @page-change="event=>{currentPage=event.page;totalPages=event.total}"/></div>

@@ -283,7 +283,7 @@ function voucherEvidenceComplete(voucher:Voucher):boolean {
 function refreshVoucherState(voucher:Voucher):void {
  const complete=voucherEvidenceComplete(voucher),required=requiredReceiptEntries(voucher);
  voucher.status=complete?'matched':'pending';
- voucher.attachmentReviewRequired=required.length>0&&!attachmentCoverage(voucher,voucher.entryAttachments||[],state.documents);
+ voucher.attachmentReviewRequired=!voucher.noAttachmentRequired&&required.length>0&&!attachmentCoverage(voucher,voucher.entryAttachments||[],state.documents);
  voucher.matchReviewRequired=!complete;
  voucher.evidenceStatus=voucher.noAttachmentRequired?'not-required':complete?'complete':'incomplete';
  if(complete)delete voucher.missingReason;

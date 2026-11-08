@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /** 从已构建的资源生成独立服务器安装包；只打包白名单，不包含数据库、凭据及用户原件。 */
 import { createHash } from 'node:crypto';
-import { chmod, cp, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -11,6 +11,7 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const output = resolve(process.argv[2] || join(root, 'releases'));
 const temporary = await mkdtemp(join(tmpdir(), 'huitong-package-'));
 const stage = join(temporary, 'huitong-server');
+const textFile = /\.(?:sh|sql|json|mjs|js|md|html|css|service|conf|timer|svg|txt|map|xml)$/i;
 const sha256 = buffer => createHash('sha256').update(buffer).digest('hex');
 function git(...args) {
   const result = spawnSync('git', args, { cwd: root, encoding: 'utf8' });
@@ -34,9 +35,13 @@ async function copyFile(path) {
   if (!metadata.isFile()) throw new Error(`打包文件不存在：${path}`);
   await mkdir(dirname(join(stage, path)), { recursive: true });
   const destination = join(stage, path);
-  await cp(source, destination);
-  // 清单声明的安装脚本权限必须与 tar 内实际权限一致，避免解压后无法直接执行。
-  if (path.endsWith('.sh')) await chmod(destination, 0o755);
+  // Windows 打包时统一文本为 LF：Shell 需要可执行换行，SQL 迁移哈希也必须跨平台一致。
+  if (textFile.test(path)) {
+    const text = await readFile(source, 'utf8');
+    await writeFile(destination, text.replace(/\r\n?/g, '\n'), path.endsWith('.sh') ? { mode: 0o755 } : undefined);
+  } else {
+    await cp(source, destination);
+  }
 }
 async function walk(directory) {
   const files = [];
@@ -71,7 +76,7 @@ try {
   await writeFile(join(stage, 'RELEASE.json'), JSON.stringify(manifest, null, 2) + '\n');
   await mkdir(output, { recursive: true });
   const archive = join(output, 'huitong-server.tar.gz');
-  const result = spawnSync('tar', ['--sort=name', '--owner=0', '--group=0', '--numeric-owner', '-czf', archive, '-C', temporary, 'huitong-server'], { stdio: 'inherit' });
+  const result = spawnSync('tar', ['--sort=name', '--owner=0', '--group=0', '--numeric-owner', '--force-local', '-czf', archive, '-C', temporary, 'huitong-server'], { stdio: 'inherit' });
   if (result.status !== 0) throw new Error('生成安装包失败');
   const digest = sha256(await readFile(archive));
   await writeFile(archive + '.sha256', `${digest}  huitong-server.tar.gz\n`);
