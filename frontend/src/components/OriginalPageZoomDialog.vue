@@ -105,7 +105,7 @@ onBeforeUnmount(()=>{disposed=true;release();const element=canvas.value;void can
 </script>
 
 <template>
- <el-dialog :model-value="modelValue" class="original-page-zoom-dialog" width="min(1200px, 96vw)" top="3vh" :fullscreen="fullscreen" append-to-body destroy-on-close :close-on-click-modal="false" @mousemove.stop @mouseup.stop @touchmove.stop @touchend.stop @close="close" @opened="opened" @closed="release">
+ <window-dialog :model-value="modelValue" v-model:fullscreen="fullscreen" class="original-page-zoom-dialog" width="min(1200px, 96vw)" top="3vh" append-to-body destroy-on-close :close-on-click-modal="false" @mousemove.stop @mouseup.stop @touchmove.stop @touchend.stop @close="close" @opened="opened" @closed="release">
   <template #header="{titleId}"><div class="zoom-heading"><strong :id="titleId">原始单据 · 单页放大</strong><span :title="fileName">{{fileName}}</span><small v-if="page">原件第 {{page.pageNumber}} / {{page.pageCount}} 页</small></div></template>
   <div class="zoom-toolbar" role="toolbar" aria-label="原件缩放工具">
    <div class="zoom-controls"><button class="btn" aria-label="缩小原件" title="缩小" :disabled="!ready||zoom<=5" @click="setZoom(zoom-25)"><ZoomOut :size="17"/></button><span class="zoom-percent" aria-live="polite">{{zoom}}%</span><button class="btn" aria-label="放大原件" title="放大" :disabled="!ready||zoom>=400" @click="setZoom(zoom+25)"><ZoomIn :size="17"/></button></div>
@@ -119,7 +119,7 @@ onBeforeUnmount(()=>{disposed=true;release();const element=canvas.value;void can
   </div>
   <div class="zoom-hint"><Move :size="14"/>放大后可拖动画面或使用滚动条查看，手机可滑动查看。</div>
   <template #footer><button class="btn" aria-label="关闭" @click="close">关闭</button></template>
- </el-dialog>
+ </window-dialog>
 </template>
 
 <style>

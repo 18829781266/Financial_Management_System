@@ -2,11 +2,13 @@ import {describe,it,expect} from 'vitest';
 import {createSSRApp,defineComponent,h} from 'vue';
 import {renderToString} from 'vue/server-renderer';
 import VoucherAttachmentsDialog from '../src/components/VoucherAttachmentsDialog.vue';
+import WindowDialog from '../src/components/WindowDialog.vue';
 import type {Voucher,SourceDocument} from '../src/types';
 
 // 使用实际SFC模板，轻量表格适配器只展开行与列的slot，核对用户最终看到的分录内容。
 const Dialog=defineComponent({props:['modelValue','title'],setup:(props,{slots})=>()=>props.modelValue?h('section',{'aria-label':props.title},[slots.default?.(),slots.footer?h('footer',slots.footer()):null]):null});
 const Column=defineComponent({name:'ElTableColumn',setup:()=>()=>null});
+const Tooltip=defineComponent({name:'ElTooltip',props:['content','disabled','placement'],setup:(_props,{slots})=>()=>slots.default?.()});
 const Table=defineComponent({props:['data'],setup:(props,{slots})=>()=>{
  const columns=slots.default?.().filter(node=>node.type===Column)||[];
  return h('table',{},[h('thead',{},h('tr',{},columns.map(col=>h('th',{},col.props?.label)))),h('tbody',{},(props.data||[]).map((row:unknown)=>h('tr',{},columns.map(col=>{
@@ -21,7 +23,7 @@ function data(){
 }
 async function render(voucher:Voucher,documents:SourceDocument[]){
  const app=createSSRApp({render:()=>h(VoucherAttachmentsDialog,{modelValue:true,voucher,documents})});
- app.component('ElDialog',Dialog);app.component('ElTable',Table);app.component('ElTableColumn',Column);
+ app.component('ElDialog',Dialog);app.component('ElTooltip',Tooltip);app.component('WindowDialog',WindowDialog);app.component('ElTable',Table);app.component('ElTableColumn',Column);
  for(const name of ['ElAlert','ElForm','ElFormItem','ElSelect','ElOption','ElInput'])app.component(name,Column);
  return renderToString(app);
 }
@@ -35,14 +37,22 @@ describe('凭证附件弹窗的可见内容',()=>{
   const first=rows.find(row=>row.includes('第一笔摘要'))!,second=rows.find(row=>row.includes('第二笔摘要'))!;
   expect(first).toContain('first-receipt.pdf');expect(first).not.toContain('second-receipt.pdf');expect(second).toContain('second-receipt.pdf');expect(second).not.toContain('first-receipt.pdf');
  });
- it('旧版凭证级已关联原件直接展示，但不冒充分录附件或分摊金额',async()=>{
+ it('旧版整凭证原件按唯一金额放入对应摘要，不改写分录核销关系',async()=>{
   const {voucher,documents}=data();delete voucher.entryAttachments;
-  const html=await render(voucher,documents),rows=html.split('<tr>'),first=rows.find(row=>row.includes('第一笔摘要'))!,second=rows.find(row=>row.includes('第二笔摘要'))!;
-  expect(first).toContain('first-receipt.pdf');expect(first).toContain('second-receipt.pdf');expect(first).toContain('整凭证关联 · 未分配分录');expect(second).not.toContain('first-receipt.pdf');expect(html).toContain('分录金额待复核');
+  const html=await render(voucher,documents),table=html.slice(html.indexOf('<table'),html.indexOf('</table>')),rows=table.split('<tr>'),first=rows.find(row=>row.includes('第一笔摘要'))!,second=rows.find(row=>row.includes('第二笔摘要'))!;
+  expect(first).toContain('first-receipt.pdf');expect(first).not.toContain('second-receipt.pdf');expect(second).toContain('second-receipt.pdf');expect(second).not.toContain('first-receipt.pdf');expect(table).toContain('金额一致 · 分录关系待复核');expect(html).not.toContain('未分配分录的原件');expect(voucher.entryAttachments).toBeUndefined();expect(voucher.documentIds).toEqual(['d-first','d-second']);
  });
- it('企业名称归集原件直接展示在附件栏，但不伪造成已确认金额关系',async()=>{
+ it('旧版金额不能唯一对应时移到独立区域，不能猜挂到同额摘要',async()=>{
+  const {voucher,documents}=data();delete voucher.entryAttachments;voucher.entries=[{summary:'同额第一笔',account:'1002 银行_3325',debit:'100.00',credit:'0.00'},{summary:'同额第二笔',account:'1002 银行_7788',debit:'200.00',credit:'0.00'},{summary:'同额第三笔',account:'管理费用',debit:'0.00',credit:'100.00'}];
+  const html=await render(voucher,documents),table=html.slice(html.indexOf('<table'),html.indexOf('</table>')),rows=table.split('<tr>'),first=rows.find(row=>row.includes('同额第一笔'))!,second=rows.find(row=>row.includes('同额第二笔'))!,third=rows.find(row=>row.includes('同额第三笔'))!,outside=html.slice(html.indexOf('</table>'));
+  expect(first).not.toContain('receipt.pdf');expect(first).toContain('未关联 · 请复核');expect(second).toContain('second-receipt.pdf');expect(third).not.toContain('receipt.pdf');
+  expect(outside).toContain('未分配分录的原件');expect(outside).toContain('first-receipt.pdf');expect(outside).not.toContain('second-receipt.pdf');expect(outside).toContain('整凭证关联 · 未分配分录');
+ });
+ it('名称归集原件只在表外说明区展示，摘要留空等待人工复核且不生成金额关系',async()=>{
   const {voucher,documents}=data();voucher.status='pending';voucher.documentIds=[];voucher.entryAttachments=[];voucher.nameAssociationIds=['name:synthetic'];documents[0]!.nameAssociationIds=['name:synthetic'];
-  const html=await render(voucher,documents);expect(html).toContain('first-receipt.pdf');expect(html).toContain('企业名称归集 · 未确认金额关系');expect(html).toContain('分录金额待复核');expect(voucher.documentIds).toEqual([]);expect(voucher.entryAttachments).toEqual([]);
+  const html=await render(voucher,documents),table=html.slice(html.indexOf('<table'),html.indexOf('</table>')),outside=html.slice(html.indexOf('</table>'));
+  expect(table).not.toContain('first-receipt.pdf');expect(table).not.toContain('企业名称归集');expect(table).toContain('未关联 · 请复核');
+  expect(outside).toContain('未分配分录的原件');expect(outside).toContain('first-receipt.pdf');expect(outside).toContain('企业名称归集 · 未确认金额关系');expect(voucher.documentIds).toEqual([]);expect(voucher.entryAttachments).toEqual([]);
  });
  it('唯一金额、账号和日期候选直接显示在对应分录附件栏',async()=>{
   const {voucher,documents}=data();voucher.status='pending';voucher.documentIds=[];voucher.entryAttachments=[];voucher.amount=100;voucher.entries[0]!.account='1002 银行_尾号3325';voucher.entries=[voucher.entries![0]!,{summary:'对方科目',account:'2202 应付账款',debit:'0.00',credit:'100.00'}];
@@ -58,7 +68,7 @@ describe('凭证附件弹窗的可见内容',()=>{
   const {voucher,documents}=data();voucher.documentIds=[];voucher.entryAttachments=[];voucher.status='pending';
   const html=await render(voucher,documents);expect(html).toContain('>取消</button>');expect(html).not.toContain('>无外部附件</button>');expect(html).not.toContain('>确认</button>');
   const app=createSSRApp({render:()=>h(VoucherAttachmentsDialog,{modelValue:true,voucher,documents,reviewFields:true})});
-  app.component('ElDialog',Dialog);app.component('ElTable',Table);app.component('ElTableColumn',Column);
+  app.component('ElDialog',Dialog);app.component('ElTooltip',Tooltip);app.component('WindowDialog',WindowDialog);app.component('ElTable',Table);app.component('ElTableColumn',Column);
   for(const name of ['ElAlert','ElForm','ElFormItem','ElSelect','ElOption','ElInput'])app.component(name,Column);
   app.component('VoucherReviewFields',defineComponent({setup:()=>()=>h('div','凭证字段表单')}));
   const combined=await renderToString(app);expect(combined).toContain('<footer>');expect(combined.slice(combined.indexOf('<footer>'))).toContain('保存并复核字段');

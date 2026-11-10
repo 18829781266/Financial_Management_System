@@ -24,24 +24,37 @@ const automaticLinks=computed<EntryAttachment[]>(()=>{
  const match=evaluateEntryAttachments([draft],props.documents,rule,allocationVouchers).matches.find(item=>item.voucherId===voucher.id);
  return (match?.entryAttachments||[]).filter(link=>!voucher.documentIds.includes(link.documentId)&&!existing.some(old=>old.entryIndex===link.entryIndex&&old.documentId===link.documentId));
 });
-// 旧整凭证关系和 R08 名称归集可直接查看，但只在首行集中展示，避免复制到每条分录或伪造分摊。
+// 无法确定分录的旧关系和名称归集只在表格下方展示，不能塞进首条摘要冒充金额关系。
 const voucherLevelDocuments=computed(()=>{
  const voucher=props.voucher;if(!voucher)return [];
  const allocated=new Set((voucher.entryAttachments||[]).map(link=>link.documentId));
- return voucher.documentIds.filter(id=>!allocated.has(id)).flatMap(id=>{const doc=props.documents.find(item=>item.id===id);return doc?[doc]:[];});
+ return voucher.documentIds.filter(id=>!allocated.has(id)).flatMap(id=>{const doc=props.documents.find(item=>item.id===id);return doc?[{doc,association:'voucher' as const}]:[];});
+});
+// 旧版只有整凭证关系时，金额与分录一一对应才用于展示；不新增或改写核销关系。
+const voucherAmountDocuments=computed(()=>{
+ const entries=props.voucher?.entries||[];
+ const candidates=voucherLevelDocuments.value.flatMap(({doc})=>{
+  let cents:number;try{cents=amountCents(doc.amount);}catch{return [];}
+  const hits=entries.flatMap((entry,entryIndex)=>{const money=entryMoney(entry);return money?.cents===cents?[{entryIndex,money}]:[];});
+  return hits.length===1?[{doc,...hits[0]!}]:[];
+ });
+ const counts=new Map<number,number>();for(const item of candidates)counts.set(item.entryIndex,(counts.get(item.entryIndex)||0)+1);
+ return candidates.filter(item=>counts.get(item.entryIndex)===1).map(({doc,entryIndex,money})=>({...doc,link:{entryIndex,documentId:doc.id,side:money.side,ruleId:'DISPLAY_AMOUNT',allocatedAmount:centsToAmount(money.cents),relationType:'settlement' as const},suggested:'amount' as const}));
 });
 const nameAssociatedDocuments=computed(()=>{
  const voucher=props.voucher;if(!voucher?.nameAssociationIds?.length)return [];
- return props.documents.filter(doc=>!voucher.documentIds.includes(doc.id)&&doc.nameAssociationIds?.some(id=>voucher.nameAssociationIds?.includes(id))&&!automaticLinks.value.some(link=>link.documentId===doc.id));
+ return props.documents.filter(doc=>!voucher.documentIds.includes(doc.id)&&doc.nameAssociationIds?.some(id=>voucher.nameAssociationIds?.includes(id))&&!automaticLinks.value.some(link=>link.documentId===doc.id)).map(doc=>({doc,association:'name' as const}));
 });
+const unassignedDocuments=computed(()=>[...voucherLevelDocuments.value.filter(item=>!voucherAmountDocuments.value.some(doc=>doc.id===item.doc.id)),...nameAssociatedDocuments.value]);
 const rows=computed(()=>(props.voucher?.entries||[]).map((entry,index)=>{
  const committed=(props.voucher?.entryAttachments||[]).filter(link=>link.entryIndex===index).flatMap(link=>{
-  const doc=props.documents.find(doc=>doc.id===link.documentId&&props.voucher?.documentIds.includes(doc.id));return doc?[{...doc,link,suggested:false}]:[];
+  const doc=props.documents.find(doc=>doc.id===link.documentId&&props.voucher?.documentIds.includes(doc.id));return doc?[{...doc,link,suggested:false as const}]:[];
  });
  const suggested=automaticLinks.value.filter(link=>link.entryIndex===index).flatMap(link=>{
-  const doc=props.documents.find(doc=>doc.id===link.documentId);return doc?[{...doc,link,suggested:true}]:[];
+  const doc=props.documents.find(doc=>doc.id===link.documentId);return doc?[{...doc,link,suggested:'bank' as const}]:[];
  });
- return {...entry,index,documents:[...committed,...suggested],voucherDocuments:index===0?voucherLevelDocuments.value:[],nameDocuments:index===0?nameAssociatedDocuments.value:[]};
+ const legacy=voucherAmountDocuments.value.filter(doc=>doc.link.entryIndex===index);
+ return {...entry,index,documents:[...committed,...suggested,...legacy]};
 }));
 const required=computed(()=>new Set(props.voucher?requiredReceiptEntries(props.voucher):[]));
 const reviewing=ref(false),reviewIndex=ref(0),selected=ref<string[]>([]),amounts=ref<Record<string,string>>({}),reason=ref(''),error=ref(''),candidateQuery=ref('');
@@ -114,7 +127,7 @@ function close(){reviewing.value=false;exemptionOpen.value=false;error.value='';
 </script>
 
 <template>
- <el-dialog :model-value="modelValue" :title="(reviewFields?'凭证复核与手工匹配 · ':'凭证分录与原始单据复核 · ')+(voucher?.no||'')" width="min(1180px, calc(100vw - 32px))" class="entry-attachments-dialog" @close="close" destroy-on-close>
+ <window-dialog :model-value="modelValue" :title="(reviewFields?'凭证复核与手工匹配 · ':'凭证分录与原始单据复核 · ')+(voucher?.no||'')" width="min(1180px, calc(100vw - 32px))" class="entry-attachments-dialog" @close="close" destroy-on-close>
   <div class="review-overview">
    <div><span class="review-kicker">当前凭证</span><strong>{{voucher?.no}}</strong><small>{{voucher?.summary}} · {{voucher?.supplier||'客商待复核'}}</small></div>
    <div class="review-total"><span>凭证金额</span><strong>¥ {{money(voucher?.amount||0)}}</strong></div>
@@ -131,30 +144,32 @@ function close(){reviewing.value=false;exemptionOpen.value=false;error.value='';
    <el-table-column label="贷方" width="125" align="right"><template #default="{row}"><span class="entry-money">{{Number(row.credit)?money(row.credit):'—'}}</span></template></el-table-column>
    <el-table-column label="附件单据" min-width="290"><template #default="{row}">
     <div class="entry-documents">
-     <div v-for="doc in row.voucherDocuments" :key="`voucher-${doc.id}`" class="entry-document-row">
-      <button class="entry-document text-link" @click="emit('view',doc)"><Paperclip :size="15"/><span>{{doc.name}}</span></button>
-      <small class="shared-chip"><Link2 :size="11"/>整凭证关联 · 未分配分录</small>
-     </div>
-     <div v-for="doc in row.nameDocuments" :key="`name-${doc.id}`" class="entry-document-row">
-      <button class="entry-document text-link" @click="emit('view',doc)"><Paperclip :size="15"/><span>{{doc.name}}</span></button>
-      <small class="name-match-chip"><Link2 :size="11"/>企业名称归集 · 未确认金额关系</small>
-     </div>
      <div v-for="doc in row.documents" :key="`${doc.id}-${doc.link.allocatedAmount||'full'}`" class="entry-document-row">
       <button class="entry-document text-link" @click="emit('view',doc)"><Paperclip :size="15"/><span>{{doc.name}}</span></button>
-      <small v-if="doc.suggested" class="auto-match-chip"><ShieldCheck :size="11"/>唯一金额候选 · 金额、账号及日期一致</small>
+      <small v-if="doc.suggested==='bank'" class="auto-match-chip"><ShieldCheck :size="11"/>唯一金额候选 · 金额、账号及日期一致</small>
+      <small v-else-if="doc.suggested==='amount'" class="auto-match-chip"><ShieldCheck :size="11"/>金额一致 · 分录关系待复核</small>
       <small v-else-if="doc.link.relationType==='reference'" class="shared-chip"><Link2 :size="11"/>共享引用 · 不计金额</small>
       <small v-else>本次分摊 <b>¥ {{money(doc.link.allocatedAmount??doc.amount)}}</b><template v-if="doc.remainingAmount!==undefined"> · 单据剩余 ¥ {{money(doc.remainingAmount)}}</template></small>
      </div>
-     <span v-if="!row.documents.length" :class="required.has(row.index)?'entry-review':'entry-empty'">{{required.has(row.index)?(row.voucherDocuments.length||row.nameDocuments.length?'分录金额待复核':'未关联 · 请复核'):(row.voucherDocuments.length||row.nameDocuments.length?'未分配分录':'未关联')}}</span>
+     <span v-if="!row.documents.length" :class="required.has(row.index)?'entry-review':'entry-empty'">{{required.has(row.index)?'未关联 · 请复核':'未关联'}}</span>
      <button v-if="!locked" class="text-link entry-review-action" :aria-label="(row.documents.length?'调整关联第':'人工复核第')+(row.index+1)+'条分录'" @click="review(row.index)">{{row.documents.length?'调整关联 / 分摊':'人工复核 / 分摊'}}</button>
     </div>
    </template></el-table-column>
   </el-table>
+  <section v-if="unassignedDocuments.length" class="unassigned-documents" aria-label="未分配分录的原件">
+   <div class="unassigned-documents-heading"><strong>未分配分录的原件</strong><span>以下原件不属于任何摘要，尚未确认分录金额关系，请通过对应摘要人工复核。</span></div>
+   <div class="unassigned-documents-list">
+    <div v-for="item in unassignedDocuments" :key="`${item.association}-${item.doc.id}`" class="entry-document-row">
+     <button class="entry-document text-link" @click="emit('view',item.doc)"><Paperclip :size="15"/><span>{{item.doc.name}}</span></button>
+     <small :class="item.association==='name'?'name-match-chip':'shared-chip'"><Link2 :size="11"/>{{item.association==='name'?'企业名称归集 · 未确认金额关系':'整凭证关联 · 未分配分录'}}</small>
+    </div>
+   </div>
+  </section>
   <div v-if="voucher?.noAttachmentRequired" class="exemption-receipt"><ShieldCheck :size="17"/><span>已确认无外部附件：{{voucher.attachmentExemptionReason}}</span></div>
   <template v-if="!locked" #footer><div class="review-dialog-footer"><span class="footer-spacer"/><button class="btn" @click="close">取消</button><button v-if="reviewFields" class="btn primary" @click="saveFields">保存并复核字段</button></div></template>
- </el-dialog>
+ </window-dialog>
 
- <el-dialog v-model="reviewing" class="entry-review-dialog" :title="'人工复核第'+(reviewIndex+1)+'条分录'" width="min(900px, calc(100vw - 32px))" append-to-body destroy-on-close>
+ <window-dialog v-model="reviewing" class="entry-review-dialog" :title="'人工复核第'+(reviewIndex+1)+'条分录'" width="min(900px, calc(100vw - 32px))" append-to-body destroy-on-close>
   <el-alert v-if="error" :title="error" type="error" :closable="false" show-icon/>
   <p class="review-entry-summary">{{reviewRow?.summary}}<small>{{reviewRow?.account}}</small></p>
   <div class="entry-target"><span>本条分录待分摊</span><strong>¥ {{money((reviewMoney?.cents||0)/100)}}</strong><small>{{reviewMoney?.side==='credit'?'贷方 · 核付款账号':'借方 · 核收款账号'}}</small></div>
@@ -176,19 +191,20 @@ function close(){reviewing.value=false;exemptionOpen.value=false;error.value='';
   </div>
   <el-form label-position="top"><el-form-item label="人工复核依据（必填）"><el-input v-model="reason" type="textarea" :rows="3" placeholder="说明账号、跨期、红字、部分付款或共享引用的原件依据，系统将保留操作记录"/></el-form-item></el-form>
   <template #footer><button class="btn" @click="reviewing=false">取消</button><button class="btn primary" @click="save">保存分摊与关联</button></template>
- </el-dialog>
+ </window-dialog>
 
- <el-dialog v-model="exemptionOpen" class="attachment-exemption-dialog" title="确认凭证无需外部附件" width="min(560px, calc(100vw - 32px))" append-to-body destroy-on-close>
+ <window-dialog v-model="exemptionOpen" class="attachment-exemption-dialog" title="确认凭证无需外部附件" width="min(560px, calc(100vw - 32px))" append-to-body destroy-on-close>
   <el-alert title="仅适用于内部结转、计提等确实没有外部原始单据的凭证；附件缺失不能使用此功能。" type="warning" :closable="false" show-icon/>
   <el-alert v-if="error" :title="error" type="error" :closable="false" show-icon style="margin-top:12px"/>
   <el-form label-position="top" style="margin-top:18px"><el-form-item label="业务依据（必填）"><el-input v-model="exemptionReason" type="textarea" :rows="4" placeholder="例如：月末内部折旧计提，凭证后附内部计算表编号，无外部发票或回单"/></el-form-item></el-form>
   <template #footer><button class="btn" @click="exemptionOpen=false">取消</button><button class="btn primary" @click="exempt">确认并留痕</button></template>
- </el-dialog>
+ </window-dialog>
 </template>
 
 <style scoped>
 .review-overview{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:24px;align-items:center;padding:16px 18px;margin-bottom:14px;background:#f2f6fa;border:1px solid #e0e8f0;border-radius:12px}.review-overview>div:first-child{display:flex;flex-direction:column;gap:4px}.review-overview strong{font-size:18px;color:#17324d}.review-overview small{display:block;color:#718399;font-weight:400}.review-kicker,.review-total span{font-size:12px;color:#718399}.review-total{text-align:right}.review-total strong{display:block;margin-top:4px;font-variant-numeric:tabular-nums}.review-total strong small{display:inline}.review-rule{display:flex;align-items:flex-start;gap:8px;margin:12px 0 16px;padding:10px 12px;background:#f4f7f5;color:#4c675b;border-radius:8px;font-size:12px;line-height:1.7}.review-rule svg{flex:none;margin-top:2px}.entry-summary,.entry-account{white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.8}.entry-money{font-variant-numeric:tabular-nums;font-weight:600;color:#2a4766}.entry-documents{display:flex;flex-direction:column;gap:10px;padding:5px 0}.entry-document-row{display:flex;flex-direction:column;gap:3px}.entry-document-row>small{font-size:11px;color:#718399;padding-left:21px}.entry-document-row>small b{color:#2a4766}.entry-document{display:flex;align-items:flex-start;gap:6px;white-space:normal;text-align:left;line-height:1.7}.entry-document svg{flex-shrink:0;margin-top:3px}.entry-document span{overflow-wrap:anywhere}.entry-review{font-size:12px;color:#a96d22}.entry-empty{color:#718399}.entry-review-action{font-size:12px;align-self:flex-start}.review-entry-summary{padding:14px 16px;background:#f4f8fc;border:1px solid #e2eaf3;border-radius:8px;margin:14px 0;line-height:1.8}.review-entry-summary small{display:block;color:#718399;overflow-wrap:anywhere}.entry-target{display:flex;align-items:baseline;gap:12px;margin-bottom:18px}.entry-target span,.entry-target small{font-size:12px;color:#718399}.entry-target strong{font-size:22px;color:#17324d;font-variant-numeric:tabular-nums}.allocation-list{margin:12px 0 16px;border:1px solid #e1e8ef;border-radius:10px;overflow:hidden}.allocation-head,.allocation-row{display:grid;grid-template-columns:minmax(0,1fr) 190px;gap:18px;align-items:center;padding:11px 14px}.allocation-head{background:#f3f6f9;color:#718399;font-size:12px}.allocation-row{border-top:1px solid #e8edf2}.allocation-row strong{display:block;font-size:13px;overflow-wrap:anywhere}.allocation-row small{display:block;margin-top:4px;color:#718399}.allocation-check{display:flex;align-items:center;gap:22px;padding:13px 15px;margin:12px 0 18px;background:#eef6f1;border-radius:9px;color:#355f4a;font-size:13px}.allocation-check.error{background:#fff4e8;color:#8c5a1d}.allocation-check small{margin-left:auto}.shared-chip{display:inline-flex;align-items:center;gap:4px;color:#526e62!important;font-size:11px;white-space:nowrap}.exemption-receipt{display:flex;gap:8px;align-items:center;margin-top:14px;padding:12px;background:#eef6f1;color:#355f4a;border-radius:8px}.spin{animation:spin 1s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}@media(max-width:700px){.review-overview{grid-template-columns:1fr 1fr;gap:12px}.review-overview>div:first-child{grid-column:1/-1}.allocation-head{display:none}.allocation-row{grid-template-columns:1fr;gap:10px}.allocation-check{flex-wrap:wrap;gap:8px 16px}.allocation-check small{width:100%;margin-left:0}.entry-target{flex-wrap:wrap}}
 .attachment-section-heading{display:flex;align-items:center;gap:12px;margin:20px 0 14px}.attachment-section-heading>span{display:grid;place-items:center;flex:none;width:28px;height:28px;border-radius:8px;background:#eaf2fc;color:#2f6db5;font-size:13px;font-weight:700}.attachment-section-heading h3{font-size:16px;line-height:1.5;color:#1d3552}.attachment-section-heading p{margin-top:3px;color:#64788e;font-size:12px;line-height:1.7}@media(max-width:760px){.attachment-section-heading p{font-size:13px}}
-.auto-match-chip,.name-match-chip{display:inline-flex;align-items:center;gap:4px}.auto-match-chip{color:#287662!important}.name-match-chip{color:#6c5b32!important}.review-dialog-footer{display:flex;align-items:center;gap:10px;width:100%}.footer-spacer{flex:1}.review-dialog-footer .btn{white-space:nowrap}@media(max-width:560px){.review-dialog-footer{flex-wrap:wrap}.review-dialog-footer .btn{min-height:44px}}
+.auto-match-chip,.name-match-chip{display:inline-flex;align-items:center;gap:4px}.auto-match-chip{color:#287662!important}.name-match-chip{color:#6c5b32!important}.review-dialog-footer{display:flex;align-items:center;gap:10px;width:100%}.footer-spacer{flex:1}.review-dialog-footer .btn{min-height:42px;white-space:nowrap}@media(max-width:560px){.review-dialog-footer{flex-wrap:wrap}.review-dialog-footer .btn{min-height:44px}}
+.unassigned-documents{margin-top:14px;padding:14px 16px;border:1px solid var(--dialog-line,#e2eaf2);border-radius:10px;background:var(--dialog-soft,#f5f8fc)}.unassigned-documents-heading{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:10px}.unassigned-documents-heading strong{font-size:13px;color:var(--dialog-title,#1d3552)}.unassigned-documents-heading span{font-size:12px;color:var(--dialog-muted,#5f7184);line-height:1.7}.unassigned-documents-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,280px),1fr));gap:12px 22px}.unassigned-documents .entry-document-row{min-width:0}
 @media(prefers-reduced-motion:reduce){.spin{animation:none}}
 </style>

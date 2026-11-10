@@ -41,4 +41,15 @@ describe('电子档案真实关系可见性',()=>{
   expect(html).toContain('记-23-部分分摊回单.pdf');
   expect(html).not.toContain('暂无已匹配归档数据');
  });
+ it('人工确认无外部附件后，电子档案显示公司、凭证及正式归档入口',async()=>{
+  const {voucher,group}=fixture();
+  const exempt:Voucher={...voucher,id:'v-exempt',no:'记-24',summary:'内部结转',documentIds:[],entryAttachments:[],noAttachmentRequired:true,attachmentExemptionReason:'合成内部结转无需外部单据',ruleId:'MANUAL'};
+  const exemptGroup:PayerGroup={...group,id:'payer:synthetic-exempt',documentIds:[],voucherIds:[exempt.id]};
+  const html=await render([exemptGroup],[exempt],[]);
+  expect(html).toContain('山西炜恒新材料科技有限公司');
+  expect(html).toContain('记-24');
+  expect(html).toContain('0 份单据 · 1 张凭证');
+  expect(html).toContain('生成正式档案册');
+  expect(html).not.toContain('暂无已匹配归档数据');
+ });
 });

@@ -66,14 +66,20 @@ export function evaluateNameAssociations(vouchers:Voucher[],documents:SourceDocu
  }
  return [...groups.values()];
 }
-/** 只保留已执行产生的关联。新增同名记录不会在导入、编辑或刷新时自行进入档案。 */
+function voucherMatchesArchiveName(voucher:Voucher,group:NameAssociation):boolean{
+ if(voucher.status==='missing'||voucher.period!==group.period)return false;
+ const target=normalizeSupplier(group.payerName);
+ // 人工保存的往来客商也可对应已有企业组；期间一致及名称规范化后的完全相等仍是硬约束。
+ return group.basis!=='documents'&&[voucher.supplier,voucher.company||''].some(name=>normalizeSupplier(name)===target);
+}
+/** 只保留已执行产生的关联。新增同名记录不会在导入或刷新时自行进入档案。 */
 export function pruneNameAssociations(source:ArchiveState):void{
  const previouslyLinked=new Set([...source.vouchers,...source.documents].filter(record=>record.nameAssociationIds?.length).map(record=>record.id));
  const rules=new Map(source.rules.map(rule=>[rule.id,rule]));
  source.nameAssociations=(Array.isArray(source.nameAssociations)?source.nameAssociations:[]).flatMap(group=>{
   if(!group||!Array.isArray(group.voucherIds)||!Array.isArray(group.documentIds)||!['company','counterparty','documents'].includes(group.basis)||typeof group.payerName!=='string')return [];
   const rule=rules.get(group.ruleId);if(!rule||group.associationType!=='name')return [];
-  const voucherIds=group.voucherIds.filter(id=>source.vouchers.some(voucher=>voucher.id===id&&voucher.status!=='missing'&&voucher.period===group.period&&normalizeSupplier(voucherName(voucher,group.basis))===normalizeSupplier(group.payerName)));
+  const voucherIds=group.voucherIds.filter(id=>source.vouchers.some(voucher=>voucher.id===id&&voucherMatchesArchiveName(voucher,group)));
   const documentIds=group.documentIds.filter(id=>source.documents.some(doc=>doc.id===id&&doc.date.startsWith(group.period)&&(!group.documentTypes||group.documentTypes.includes(doc.type))&&names(doc,group.partyField||'either').some(name=>supplierSimilarity(name,group.payerName)>=group.confidence)));
   return (group.basis==='documents'?documentIds.length>=2:voucherIds.length&&documentIds.length)?[{...group,voucherIds,documentIds}]:[];
  });
@@ -83,6 +89,21 @@ export function pruneNameAssociations(source:ArchiveState):void{
   for(const record of source.documents.filter(doc=>group.documentIds.includes(doc.id)))record.nameAssociationIds=[...(record.nameAssociationIds||[]),group.id];
  }
  for(const record of [...source.vouchers,...source.documents])if(previouslyLinked.has(record.id)&&!record.nameAssociationIds?.length&&record.status!=='matched'){record.matchReviewRequired=true;record.lastMatchReason='原名称关联已移除或主体已变更，请复核后重新关联';}
+}
+/** 仅在保存客商或提交名称匹配时调用；普通分组重建和解除匹配不会自动挂回。 */
+export function associateVoucherWithExistingCompany(source:ArchiveState,voucherId:string,time:string):boolean{
+ const voucher=source.vouchers.find(item=>item.id===voucherId);
+ if(!voucher||voucher.status!=='pending'||voucher.documentIds.length)return false;
+ const target=normalizeSupplier(voucher.supplier);if(target.length<2)return false;
+ const matches=(source.nameAssociations||[]).filter(group=>group.basis!=='documents'&&group.period===voucher.period&&normalizeSupplier(group.payerName)===target);
+ // 同期存在多个同名组时不猜测，保持人工复核，避免重复归档。
+ if(matches.length!==1)return false;
+ const selected=matches[0]!;
+ source.nameAssociations=(source.nameAssociations||[]).map(group=>({...group,voucherIds:group.id===selected.id?[...new Set([...group.voucherIds,voucher.id])]:group.voucherIds.filter(id=>id!==voucher.id),updatedAt:group.id===selected.id?time:group.updatedAt}));
+ pruneNameAssociations(source);
+ const associated=!!voucher.nameAssociationIds?.includes(selected.id);
+ if(associated){voucher.matchReviewRequired=false;voucher.lastMatchRuleId=selected.ruleId;voucher.lastMatchReason=`${selected.ruleId}：往来客商与已归档企业名称一致，已归入同期企业档案；凭证金额关系仍需核对`;}
+ return associated;
 }
 export function detachNameAssociations(source:ArchiveState,voucherIds:string[],documentIds:string[]):void{
  source.nameAssociations=(source.nameAssociations||[]).map(group=>({...group,voucherIds:group.voucherIds.filter(id=>!voucherIds.includes(id)),documentIds:group.documentIds.filter(id=>!documentIds.includes(id))}));pruneNameAssociations(source);

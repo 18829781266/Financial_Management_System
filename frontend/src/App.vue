@@ -378,7 +378,7 @@ async function reset(){
     <RecordEditDialog v-model="editOpen" :kind="editKind" :record="editRecord" @saved="edited"/>
     <FilePreviewDialog v-model="previewOpen" v-bind="previewFile"/>
     <VoucherAttachmentsDialog v-model="attachmentOpen" :voucher="attachmentVoucher" :documents="state.documents" :review-fields="attachmentReviewFields" @saved="edited" @view="viewFile"/>
-    <el-dialog v-model="helpOpen" class="help-dialog" title="使用帮助与系统说明" width="min(680px, calc(100vw - 32px))">
+    <window-dialog v-model="helpOpen" class="help-dialog" title="使用帮助与系统说明" width="min(680px, calc(100vw - 32px))">
       <div class="help-content">
        <div class="help-brand"><ShieldCheck :size="32"/><div><h3>汇通云 · 电子会计档案</h3><p>从凭证采集到原始单据查阅</p></div></div>
        <p>业务数据保存在当前浏览器中。导入、规则配置、自动匹配、手工关联和操作记录均保存在当前浏览器，不跨设备同步。</p>
@@ -393,8 +393,8 @@ async function reset(){
        <div class="info-banner"><CircleHelp :size="19"/><span>当前版本为浏览器本地业务工作副本。配套 Java 后端尚未接入本轮数据流，不能将本地 PDF 或状态视为正式防篡改会计存证。</span></div>
        <p class="muted-text">匹配率、OCR 准确率与匹配准确率需使用真实标注数据分别评估，界面不提供未经验证的准确率承诺。</p>
       </div>
-    </el-dialog>
-    <el-dialog :model-value="dialog!==''" class="app-dialog" @close="dialog=''" :title="({create:'生成电子档案册',manual:'手工匹配凭证',missing:'标记附件缺失',rule:'配置匹配规则',import:'导入 ERP 凭证',upload:'上传原始单据',evidence:'凭证关联证据链',archiveInfo:'档案信息与文件存证'} as Record<string,string>)[dialog]" :width="dialog==='manual'||dialog==='evidence'?'780px':'580px'" destroy-on-close>
+    </window-dialog>
+    <window-dialog :model-value="dialog!==''" class="app-dialog" @close="dialog=''" :title="({create:'生成电子档案册',manual:'手工匹配凭证',missing:'标记附件缺失',rule:'配置匹配规则',import:'导入 ERP 凭证',upload:'上传原始单据',evidence:'凭证关联证据链',archiveInfo:'档案信息与文件存证'} as Record<string,string>)[dialog]" :width="dialog==='manual'||dialog==='evidence'?'780px':'580px'" destroy-on-close>
       <template v-if="dialog==='create'"><div class="info-banner"><ShieldCheck :size="18"/><span>校验关联状态、金额、附件数量和发票印章，合并所上传原件；未提供影像的记录生成标明来源的信息页。</span></div><ArchiveRangeForm v-model="createForm" :vouchers="state.vouchers" :archives="state.archives" @validity-change="archiveSelectionValid=$event"/><p class="muted-text">档案 PDF 保存在当前浏览器并计算 SHA-256。正式会计存证仍需后台归档与企业复核；信息页不能替代原始单据。</p></template>
       <template v-else-if="dialog==='manual'&&focusVoucher"><VoucherReviewFields v-if="focusVoucher.reviewStatus==='pending'" :voucher="focusVoucher" @saved="edited"/>
        <div class="voucher-summary"><span><FileText :size="19"/>{{focusVoucher.no}}</span><strong>¥ {{money(focusVoucher.amount)}}</strong><p>{{focusVoucher.summary}} · {{focusVoucher.supplier}}</p></div>
@@ -435,7 +435,7 @@ async function reset(){
       </template>
       <template v-else-if="dialog==='archiveInfo'&&selectedArchive"><div class="archive-info-icon"><ShieldCheck :size="40"/></div><h3 class="center-text">{{selectedArchive.title}}</h3><div class="info-row"><span>会计期间</span><strong>{{selectedArchive.period}}</strong></div><div class="info-row"><span>凭证范围</span><strong>{{selectedArchive.startVoucherNo}} — {{selectedArchive.endVoucherNo}}</strong></div><div class="info-row"><span>凭证数量 / 页数</span><strong>{{selectedArchive.voucherCount}} 张 / {{selectedArchive.pageCount}} 页</strong></div><div class="info-row"><span>当前状态</span><span class="status matched"><LockKeyhole :size="12"/>演示只读档案</span></div><div class="hash-box"><span>SHA-256 文件摘要</span><code>{{selectedArchive.hash||'尚未导出 PDF；导出时计算实际文件摘要。'}}</code></div><div class="info-banner"><CircleHelp :size="17"/><span>浏览器本地状态不构成正式防篡改存证。正式档案的哈希与锁定状态由 Java 后端持久化。</span></div></template>
       <template #footer><button class="btn" @click="dialog=''">{{['evidence','archiveInfo'].includes(dialog)?'关闭':'取消'}}</button><button v-if="!['evidence','archiveInfo'].includes(dialog)" class="btn primary" :disabled="busy||(dialog==='create'&&!archiveSelectionValid)" @click="dialog==='create'?createArchive():dialog==='manual'?bindManual():dialog==='missing'?saveMissing():saveRule()"><RefreshCw v-if="busy" class="spin" :size="15"/>{{busy?'处理中…':dialog==='create'?'校验并生成':dialog==='import'?'确认导入':dialog==='manual'?'确认关联':'保存'}}</button></template>
-    </el-dialog>
+    </window-dialog>
     <div v-if="pdfTemplateActive" ref="pdfNodes" class="pdf-export" aria-hidden="true"><template v-if="archiveRecords.length"><div v-for="(record,i) in archiveRecords" :key="`${record.kind}-${i}`" class="export-sheet"><ArchiveRecordPage :record="record" :index="i"/></div></template><template v-else-if="selectedArchive"><div v-for="i in 8" :key="i" class="export-sheet"><DocumentPage :page="i-1" :period="selectedArchive?.period||'2026-10'" :voucher-no="previewVoucher?.no" :supplier="previewVoucher?.supplier" :amount="previewVoucher?.amount"/><span class="export-watermark">演示样张 · 非正式会计档案</span></div></template></div>
   </div>
 </template>

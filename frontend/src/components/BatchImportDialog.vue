@@ -187,6 +187,8 @@ async function submit(){
  if(assessments.value.some(x=>x.issues.length)){await locateFirstIssue();return;}
  busy.value=true;
  try{
+  // 纯结构化数据没有文件读写等待，也需先绘制忙碌锁，避免提交期间误关窗口。
+  await yieldImportTurn();
   const vouchers=rows.value.filter(r=>r.kind==='voucher').map(row=>({origin:row.origin,file:row.file,metadata:row.metadata,values:{...row}}));
   const documents=rows.value.filter(r=>r.kind==='document').map(row=>({file:row.file!,fields:{supplier:row.supplier,payerName:row.supplier,payeeName:row.payeeName,payerAccount:row.payerAccount,payeeAccount:row.payeeAccount,accountVersion:row.accountVersion,remarks:row.remarks,bankNo:row.bankNo,number:row.invoiceNo,amount:row.amount,date:row.date,type:row.type,seal:row.seal,sourceKind:row.sourceKind,sourcePages:row.sourcePages,reviewReasons:row.reviewReasons,extractionStatus:row.sourceKind==='pdf-text'?'pending' as const:undefined}}));
   const result=await store.importMixedBatch(vouchers,documents);
@@ -202,7 +204,7 @@ function template(format:'json'|'csv'){
 const typeLabel=(row:Draft)=>row.kind==='voucher'?'记账凭证':({invoice:'发票',bank:'银行回单',contract:'合同',approval:'审批单'}[row.type]);
 </script>
 <template>
- <el-dialog :model-value="modelValue" @close="close" :close-on-click-modal="false" :close-on-press-escape="!busy&&!reading" :show-close="!busy&&!reading" :title="isVoucher?'批量导入凭证 / ZIP':'批量上传原始单据 / ZIP'" width="1220px" class="batch-import-dialog" destroy-on-close>
+ <window-dialog :model-value="modelValue" @close="close" :close-on-click-modal="false" :close-on-press-escape="!busy&&!reading" :show-close="!busy&&!reading" :title="isVoucher?'批量导入凭证 / ZIP':'批量上传原始单据 / ZIP'" width="1220px" class="batch-import-dialog" destroy-on-close>
   <div class="info-banner"><CircleHelp :size="18"/><span>支持 ZIP 批量导入并自动区分凭证、发票和银行回单。文字型 PDF 提取金额、日期和分录，自动合并续页、分拆同页回单；扫描图片需补录或接入 OCR。导入成功后系统立即自动匹配；成功记录显示已匹配归档，未关联记录转为请复核。</span></div>
   <input ref="input" type="file" accept=".zip,.json,.csv,.pdf,.png,.jpg,.jpeg" multiple hidden @change="changed"/>
   <button :class="['upload-zone','compact',{dragged}]" :disabled="busy||reading" @click="input?.click()" @dragover.prevent="dragged=true" @dragleave.prevent="dragged=false" @drop.prevent="dropped"><Upload :size="27"/><strong>{{reading?progress:'点击或拖拽文件到此处，可直接选择压缩包'}}</strong><span>ZIP 最多 30 MB、展开最多 100 文件；JSON / CSV 每文件 10 MB，PDF / 图片每文件 20 MB</span></button>
@@ -233,7 +235,7 @@ const typeLabel=(row:Draft)=>row.kind==='voucher'?'记账凭证':({invoice:'发�
   <div v-else class="empty" style="min-height:90px">可直接选择包含凭证和原始单据的 ZIP 压缩包</div>
   <div v-if="rows.length>previewPageSize" class="import-paging"><span>共 {{rows.length}} 条，确认后导入全部记录</span><el-pagination v-model:current-page="previewPage" :page-size="previewPageSize" :total="rows.length" layout="prev, pager, next" size="small"/></div>
   <template #footer><button class="btn" :disabled="busy||reading" @click="close">取消</button><button class="btn primary" :disabled="busy||reading||!rows.length" @click="submit">{{busy?'正在导入…':`确认导入（${rows.length}）`}}</button></template>
- </el-dialog>
+ </window-dialog>
 </template>
 
 <style scoped>

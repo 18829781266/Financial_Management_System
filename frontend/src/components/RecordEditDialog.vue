@@ -29,7 +29,7 @@ function save(){
 }
 </script>
 <template>
- <el-dialog :model-value="modelValue" class="record-edit-dialog" @close="emit('update:modelValue',false)" :title="kind==='voucher'?'编辑与复核凭证':'补录与复核单据'" width="680px" destroy-on-close>
+ <window-dialog :model-value="modelValue" class="record-edit-dialog" @close="emit('update:modelValue',false)" :title="kind==='voucher'?'编辑与复核凭证':'补录与复核单据'" width="680px" destroy-on-close>
   <el-alert v-if="error&&kind==='document'" :title="error" type="error" :closable="false" show-icon/>
   <el-alert v-if="kind==='document'&&reviewReasons.length" :title="reviewReasons.join('；')" type="warning" :closable="false" show-icon style="margin-bottom:16px"/>
   <VoucherReviewFields v-if="voucherRecord" ref="voucherFields" :voucher="voucherRecord" :show-heading="false" :show-save-action="false" @saved="emit('saved');emit('update:modelValue',false)"/>
@@ -56,5 +56,5 @@ function save(){
    <el-table :data="entries" size="small" max-height="220"><el-table-column prop="summary" label="摘要" min-width="150"/><el-table-column prop="account" label="科目" min-width="160"/><el-table-column prop="debit" label="借方" align="right" width="110"/><el-table-column prop="credit" label="贷方" align="right" width="110"/></el-table>
   </template>
   <template #footer><button class="btn" @click="emit('update:modelValue',false)">取消</button><button class="btn primary" @click="save">保存并复核</button></template>
- </el-dialog>
+ </window-dialog>
 </template>

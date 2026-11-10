@@ -75,6 +75,29 @@ describe('名称关联的状态、档案与凭证金额边界',()=>{
   expect(store.state.lastMatchRun?.financialMatched).toBe(0);expect(store.state.lastMatchRun?.nameAssociatedDocuments).toBe(1);
   expect(()=>store.generateArchive({period,startVoucherNo:voucher.no,endVoucherNo:voucher.no})).toThrow('尚未完成附件匹配');
  });
+ async function pendingCounterparty(){
+  const original=await pair();await store.autoMatch(period);
+  await store.importVoucherBatch([{values:{...values('名称-待归组'),supplier:'尚未核实的客商',company:undefined}}]);
+  const voucher=store.state.vouchers.find(item=>item.no==='名称-待归组')!;
+  expect(voucher.nameAssociationIds||[]).toEqual([]);expect(original.voucher.id).not.toBe(voucher.id);return voucher;
+ }
+ it('保存与已有企业同名的往来客商后立即归入同期档案，不写金额附件关系',async()=>{
+  const voucher=await pendingCounterparty();store.updateVoucher(voucher.id,{...values('名称-待归组'),company:undefined,supplier:company});
+  const group=store.state.nameAssociations.find(item=>item.period===period&&item.payerName===company);
+  expect(group?.voucherIds).toContain(voucher.id);expect(voucher.nameAssociationIds).toContain(group?.id);expect(collectionStatus(voucher)).toBe('matched');expect(voucher.matchReviewRequired).toBe(false);
+  expect(voucher.documentIds).toEqual([]);expect(voucher.entryAttachments||[]).toEqual([]);expect(voucher.status).toBe('pending');expect(voucher.lastMatchReason).toContain('往来客商与已归档企业名称一致');
+  await nextTick();vi.resetModules();store=(await import('../src/store')).useArchiveStore();
+  const restored=store.state.vouchers.find(item=>item.id===voucher.id)!;expect(restored.supplier).toBe(company);expect(store.state.nameAssociations.find(item=>item.id===group?.id)?.voucherIds).toContain(voucher.id);expect(collectionStatus(restored)).toBe('matched');expect(restored.documentIds).toEqual([]);
+ });
+ it('同期不完全同名或不同期间的客商不会进入已有企业分组',async()=>{
+  const voucher=await pendingCounterparty();
+  store.updateVoucher(voucher.id,{...values('名称-待归组'),company:undefined,supplier:'合成其他往来有限公司'});expect(voucher.nameAssociationIds||[]).toEqual([]);expect(collectionStatus(voucher)).not.toBe('matched');
+  store.updateVoucher(voucher.id,{...values('名称-待归组'),company:undefined,supplier:company,period:'2026-07',date:'2026-07-01'});expect(voucher.nameAssociationIds||[]).toEqual([]);expect(store.state.nameAssociations[0]?.voucherIds).not.toContain(voucher.id);expect(voucher.documentIds).toEqual([]);
+ });
+ it('解除名称匹配后的重建不会把凭证静默挂回企业',async()=>{
+  const voucher=await pendingCounterparty();store.updateVoucher(voucher.id,{...values('名称-待归组'),company:undefined,supplier:company});store.unmatchVoucher(voucher.id,'人工解除同名企业归组');
+  expect(voucher.nameAssociationIds||[]).toEqual([]);expect(collectionStatus(voucher)).toBe('review');expect(store.state.nameAssociations[0]?.voucherIds).not.toContain(voucher.id);
+ });
  it('人工确认金额关系后按凭证客商归入财务档案，并退出旧名称组',async()=>{
   await store.importVoucherBatch([{values:values()}]);const doc=await store.addDocument(file(),fields('MANUAL-NAME',{amount:100}));const voucher=store.state.vouchers.find(item=>item.no==='名称-1')!;
   await store.autoMatch(period);expect(store.state.nameAssociations).toHaveLength(1);expect(voucher.documentIds).toEqual([]);

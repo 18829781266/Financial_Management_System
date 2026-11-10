@@ -115,7 +115,7 @@ async def main():
         browser = await p.chromium.launch(
             executable_path=os.getenv('BROWSER_EXECUTABLE') or None,
             headless=True, args=['--no-sandbox'])
-        context = await browser.new_context(viewport={'width':1440, 'height':960})
+        context = await browser.new_context(viewport={'width':1440, 'height':960}, ignore_https_errors=base.startswith('https:'))
         page = await context.new_page()
         page.set_default_timeout(20000)
         page.on('pageerror', lambda error: errors.append(str(error)))
@@ -260,11 +260,10 @@ async def main():
                         await edit.locator('.voucher-field-review').count() == 1 and
                         await edit.locator('.el-table').count() == 1)
             entries = edit
-            await check('合并复核主弹窗不显示单独取消按钮',
-                        await entries.get_by_role('button', name='取消', exact=True).count() == 0)
+            await check('合并复核主弹窗保留取消入口',
+                        await entries.get_by_role('button', name='取消', exact=True).count() == 1)
             await inspect_dialog(page, entries, '凭证分录复核')
             await capture(page, entries, 'dialog-entry-attachments-desktop')
-            await entries.get_by_role('button', name='确认', exact=True).click()
             exemption = page.locator('.attachment-exemption-dialog:visible')
             await inspect_dialog(page, exemption, '无需外部附件确认')
             await capture(page, exemption, 'dialog-attachment-exemption-desktop')
@@ -292,7 +291,7 @@ async def main():
 
             await record_row.get_by_role('button', name='手工匹配', exact=True).click()
             entries = page.locator('.entry-attachments-dialog:visible')
-            await entries.get_by_role('button', name='确认', exact=True).click()
+            await entries.get_by_role('button', name='保存并复核字段', exact=True).click()
             exemption = page.locator('.attachment-exemption-dialog:visible')
             await exemption.locator('textarea').fill('合成验收：内部结转凭证，无外部原始单据')
             await exemption.get_by_role('button', name='确认并留痕', exact=True).click()

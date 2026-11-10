@@ -119,7 +119,7 @@ onBeforeUnmount(() => {
         <div v-else class="users-table-scroll"><table class="users-table"><thead><tr><th scope="col">用户</th><th scope="col">账号</th><th scope="col">角色</th><th scope="col">创建时间</th><th scope="col">状态</th><th scope="col" class="user-actions-heading">操作</th></tr></thead><tbody><tr v-for="user in filteredUsers" :key="user.id"><td><div class="user-identity"><span :class="['user-list-avatar',{'is-admin':user.role==='SUPER_ADMIN'}]">{{firstCharacter(user.displayName)}}</span><div><strong>{{user.displayName}}</strong><small v-if="user.id===authState.user?.id">当前账号</small></div></div></td><td><span class="user-account">{{user.username}}</span></td><td><span :class="['user-role-badge',{'is-admin':user.role==='SUPER_ADMIN'}]"><ShieldCheck v-if="user.role==='SUPER_ADMIN'" :size="13"/><UserRound v-else :size="13"/>{{user.role==='SUPER_ADMIN'?'超级管理员':'普通用户'}}</span></td><td><time :datetime="user.createdAt">{{formatDate(user.createdAt)}}</time></td><td><span class="user-status"><i></i>正常</span></td><td class="user-actions"><button v-if="user.role==='USER'" class="btn danger delete-user-button" :disabled="loading||creating||!!deleteTargetId" @click="deleteUser(user)"><LoaderCircle v-if="deleting&&deleteTargetId===user.id" :size="14" class="users-spinner"/><Trash2 v-else :size="14"/><span>{{deleting&&deleteTargetId===user.id?'正在删除…':'删除用户'}}</span></button><span v-else class="system-account">系统账号</span></td></tr><tr v-if="!filteredUsers.length"><td colspan="6" class="users-empty"><UsersRound :size="31"/><p>{{query?'未找到符合条件的用户':'暂无账号数据，请刷新重试'}}</p></td></tr></tbody></table></div>
         <div class="users-table-footer"><span>共 {{filteredUsers.length}} 个{{query?'符合条件的':''}}账号</span><span><ShieldCheck :size="14"/>用户管理仅对超级管理员开放</span></div>
       </div>
-      <el-dialog v-model="createOpen" class="create-user-dialog" title="新增普通用户" width="520px" :close-on-click-modal="false" :close-on-press-escape="!creating" :show-close="!creating" @closed="clearDraft">
+      <window-dialog v-model="createOpen" class="create-user-dialog" title="新增普通用户" width="520px" :close-on-click-modal="false" :close-on-press-escape="!creating" :show-close="!creating" @closed="clearDraft">
         <form id="create-user-form" class="create-user-form" novalidate :aria-busy="creating" @submit.prevent="createUser">
           <p class="create-user-description">为团队成员创建独立账号。创建后，将账号与初始密码告知本人即可登录。</p>
           <div v-if="createError" ref="createErrorElement" class="create-user-error" role="alert" tabindex="-1"><CircleAlert :size="18"/><span>{{createError}}</span></div>
@@ -129,7 +129,7 @@ onBeforeUnmount(() => {
           <div class="create-user-role"><span><UserRound :size="17"/>普通用户</span><p>可登录使用业务功能，没有添加或删除用户的权限。</p></div>
         </form>
         <template #footer><button class="btn" :disabled="creating" @click="closeCreate">取消</button><button class="btn primary" type="submit" form="create-user-form" :disabled="creating"><LoaderCircle v-if="creating" :size="16" class="users-spinner"/><span>{{creating?'正在创建…':'创建用户'}}</span></button></template>
-      </el-dialog>
+      </window-dialog>
     </template>
   </section>
 </template>

@@ -33,7 +33,7 @@ async def main():
             headless=True,
             args=['--no-sandbox'],
         )
-        page = await browser.new_page(viewport={'width': 1440, 'height': 1000})
+        page = await browser.new_page(viewport={'width': 1440, 'height': 1000}, ignore_https_errors=base.startswith('https:'))
         page.set_default_timeout(45000)
         page.on('pageerror', lambda error: errors.append(str(error)))
 

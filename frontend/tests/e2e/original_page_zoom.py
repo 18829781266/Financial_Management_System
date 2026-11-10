@@ -10,7 +10,7 @@ async def check(label,condition=True):
 async def main():
  pdf=ART/'zoom-bank.pdf';png=ART/'zoom-bank.png';bank_pdf(pdf,[(600,300,0),(600,800,0),(600,800,90)]);colored_png(png)
  async with async_playwright() as p:
-  browser=await p.chromium.launch(executable_path=os.getenv('BROWSER_EXECUTABLE') or None,headless=True,args=['--no-sandbox']);page=await browser.new_page(viewport={'width':1536,'height':1050});page.set_default_timeout(15000);errors=[];page.on('pageerror',lambda e:errors.append(str(e)))
+  browser=await p.chromium.launch(executable_path=os.getenv('BROWSER_EXECUTABLE') or None,headless=True,args=['--no-sandbox']);page=await browser.new_page(ignore_https_errors=os.getenv('BASE_URL','').startswith('https:'),viewport={'width':1536,'height':1050});page.set_default_timeout(15000);errors=[];page.on('pageerror',lambda e:errors.append(str(e)))
   async def dialog():
    d=page.locator('.original-page-zoom-dialog:visible');await d.wait_for();return d
   async def rendered(d):await d.locator('.zoom-canvas').wait_for();await page.wait_for_function("(()=>{const c=document.querySelector('.original-page-zoom-dialog .zoom-canvas');return c&&c.width>100&&c.height>100&&!document.querySelector('.original-page-zoom-dialog [aria-busy=true]')})()")

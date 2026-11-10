@@ -8,7 +8,7 @@ import {voucherInputIssues,inputField} from './voucherValidation';
 import {validImportSequence} from './recordOrder';
 import {evaluateRules} from './matchingEngine';
 import {evaluateMatchPlan} from './matchEvaluation';
-import {nameAssociationRule,pruneNameAssociations,detachNameAssociations,visibleArchiveGroups} from './nameAssociation';
+import {nameAssociationRule,pruneNameAssociations,detachNameAssociations,associateVoucherWithExistingCompany,visibleArchiveGroups} from './nameAssociation';
 import {collectionStatus} from './matchWorkflow';
 import {normalizeSupplier} from './matchUtils';
 import {receiptEntryRule,RECEIPT_RULE_ID,normalizeBankAccount,entryMoney,attachmentCoverage,clearReceiptReference,writeReceiptReference,requiredReceiptEntries} from './entryAttachments';
@@ -362,7 +362,9 @@ function updateVoucher(voucherId:string,values:Record<string,unknown>):void{
   Object.assign(voucher,next,{id:voucherId,fileId:voucher.fileId,fileName:voucher.fileName,matchReviewRequired:wasMatched?false:matchReviewRequired},wasMatched?relation:{});delete voucher.missingReason;
   if(beforeMatchData!==JSON.stringify(voucher))bumpMatchDataRevision();
   rebuildPayerGroups();
-  log(metadata?'复核凭证':'编辑凭证',`已更新 ${voucher.no} 的结构化字段${next.reviewStatus==='pending'?'；往来对象仍待复核':''}`);
+  // 保存客商是显式复核动作；仅限同期、规范化名称完全一致的现有企业组。
+  const companyAssociated=associateVoucherWithExistingCompany(state,voucherId,localTime());
+  log(metadata?'复核凭证':'编辑凭证',`已更新 ${voucher.no} 的结构化字段${next.reviewStatus==='pending'?'；往来对象仍待复核':''}${companyAssociated?'；已按同名客商归入同期企业档案':''}`);
 }
 function updateDocument(documentId:string,fields:DocumentDraft['fields']):void{
   ensureIdle();const doc=state.documents.find(d=>d.id===documentId);
@@ -422,6 +424,15 @@ function matchedPayerGroups(source:ArchiveState):PayerGroup[]{
  const groups=new Map<string,PayerGroup>();
  const documents=new Map(source.documents.map(doc=>[doc.id,doc]));
  for(const voucher of source.vouchers){
+  // 已人工确认的无附件豁免凭证也是完整档案，按凭证期间和往来客商直接归集。
+  if(voucher.noAttachmentRequired&&voucher.status==='matched'){
+   const payer=voucher.supplier.trim();
+   const key=`${voucher.period}/${payer?normalizeSupplier(payer):'__unassigned__'}`;
+   let group=groups.get(key);
+   if(!group){group={id:`payer:${key}`,period:voucher.period,payerName:payer||'请复核付款人',needsPayerReview:!payer,documentIds:[],voucherIds:[],updatedAt:localTime()};groups.set(key,group);}
+   if(!group.voucherIds.includes(voucher.id))group.voucherIds.push(voucher.id);
+   continue;
+  }
   if((voucher.status!=='matched'&&!voucher.entryAttachments?.length)||!voucher.documentIds.length)continue;
   const evidence=voucher.documentIds.map(docId=>documents.get(docId));
   // 分组来自真实关系；部分分摊的回单也可作为已核实证据，其剩余额度另在复核池管理。
@@ -622,6 +633,7 @@ async function autoMatch(period?: string): Promise<{ matched: number; remaining:
   for(const outcome of plan.financial.outcomes.filter(outcome=>targetIds.has(outcome.voucherId))){const voucher=voucherById.get(outcome.voucherId);if(voucher){voucher.lastMatchReason=outcome.reason;voucher.lastMatchRuleId=outcome.ruleId;}}
   const evaluatedNames=period?plan.names.filter(group=>group.period===period):plan.names;
   state.nameAssociations=[...(state.nameAssociations||[]).filter(group=>period&&group.period!==period),...evaluatedNames];pruneNameAssociations(state);
+  for(const voucher of targets)associateVoucherWithExistingCompany(state,voucher.id,localTime());
   const named=state.nameAssociations.filter(group=>!period||group.period===period);
   for(const group of named)for(const voucherId of group.voucherIds){
    const voucher=targets.find(v=>v.id===voucherId);if(!voucher||voucher.status==='matched')continue;

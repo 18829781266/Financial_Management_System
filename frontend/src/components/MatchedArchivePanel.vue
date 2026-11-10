@@ -26,6 +26,7 @@ const typeLabel=(type:SourceDocument['type'])=>({invoice:'发票',bank:'银行�
 const payer=(document:SourceDocument)=>document.payerName??document.supplier;
 // 档案展示以实时双边关联为准。部分分摊回单虽有剩余额度，已确认关系仍属于有效归档证据。
 const archivedVouchers=computed(()=>props.vouchers.filter(voucher=>{
+ if(voucher.noAttachmentRequired)return voucher.status==='matched';
  if((voucher.status!=='matched'&&!voucher.entryAttachments?.length)||!voucher.documentIds.length)return false;
  return voucher.documentIds.every(id=>{
   const document=props.documents.find(item=>item.id===id);
@@ -38,10 +39,11 @@ const archiveGroups=computed(()=>props.groups.flatMap(group=>{
   const documentIds=group.documentIds.filter(id=>props.documents.some(document=>document.id===id&&document.nameAssociationIds?.includes(group.id)));
   return (group.voucherIds.length?voucherIds.length&&documentIds.length:documentIds.length>=2)?[{...group,voucherIds,documentIds}]:[];
  }
- const vouchers=archivedVouchers.value.filter(voucher=>voucher.period===group.period&&voucher.documentIds.some(id=>group.documentIds.includes(id)));
+ const vouchers=archivedVouchers.value.filter(voucher=>voucher.period===group.period&&(voucher.noAttachmentRequired?group.voucherIds.includes(voucher.id):voucher.documentIds.some(id=>group.documentIds.includes(id))));
  const relatedIds=new Set(vouchers.flatMap(voucher=>voucher.documentIds));
  const documentIds=group.documentIds.filter(id=>relatedIds.has(id)&&props.documents.some(document=>document.id===id));
- return documentIds.length&&vouchers.length?[{...group,payerName:group.needsPayerReview?'付款人未录入':group.payerName,documentIds,voucherIds:vouchers.map(voucher=>voucher.id)}]:[];
+ const hasExemptVoucher=vouchers.some(voucher=>voucher.noAttachmentRequired&&voucher.status==='matched');
+ return (documentIds.length||hasExemptVoucher)&&vouchers.length?[{...group,payerName:group.needsPayerReview?'付款人未录入':group.payerName,documentIds,voucherIds:vouchers.map(voucher=>voucher.id)}]:[];
 }));
 const filteredGroups=computed(()=>{
  const order=new Map(latestImported(props.documents,'prepend').map((document,index)=>[document.id,index]));
@@ -56,7 +58,7 @@ const groupDocuments=computed(()=>{
 });
 const matchedVouchers=computed(()=>{
  const ids=new Set(selectedGroup.value?.voucherIds||[]),documentIds=new Set(groupDocuments.value.map(document=>document.id));
- return latestImported(selectedGroup.value?.associationType==='name'?props.vouchers.filter(voucher=>ids.has(voucher.id)):archivedVouchers.value.filter(voucher=>ids.has(voucher.id)&&voucher.documentIds.some(id=>documentIds.has(id))),'append');
+ return latestImported(selectedGroup.value?.associationType==='name'?props.vouchers.filter(voucher=>ids.has(voucher.id)):archivedVouchers.value.filter(voucher=>ids.has(voucher.id)&&(voucher.noAttachmentRequired||voucher.documentIds.some(id=>documentIds.has(id)))),'append');
 });
 // 列表分页只控制展示，不裁剪预览记录或关联数据；翻到任何一页仍可查看、核对原件。
 const pagedVouchers=computed(()=>matchedVouchers.value.slice((voucherListPage.value-1)*listPageSize,voucherListPage.value*listPageSize));
