@@ -15,7 +15,7 @@ const palettes:Record<string,[string,string,string,string]>={
  upload:['#4874e7','#9cbaff','#edf1ff','#3258b2'],
  verified:['#189d86','#70d9b4','#e6f8f0','#0c7a69'],
  };
-const palette=computed(()=>palettes[props.name]||palettes.overview!);
+const palette=computed(()=>palettes[props.name]||palettes.archives!);
 const uid=`feature-${useId().replace(/[^a-z0-9]/gi,'')}`;
 const styles=computed(()=>({width:`${props.size}px`,height:`${props.size}px`,'--fi-main':palette.value[0],'--fi-light':palette.value[1],'--fi-soft':palette.value[2],'--fi-deep':palette.value[3]}));
 </script>
@@ -107,11 +107,16 @@ const styles=computed(()=>({width:`${props.size}px`,height:`${props.size}px`,'--
      <path d="M25 14v13" stroke="var(--fi-light)" stroke-width="1.2"/>
      <path d="M17 32h12" stroke="white" stroke-width="2"/>
     </template>
-    <template v-else>
+    <template v-else-if="name==='verified'">
      <path d="m24 8 14 5v10c0 9-8 14-14 17-6-3-14-8-14-17V13Z" :fill="`url(#${uid}-ink)`"/>
      <path d="m14 16 10-4 9 3" stroke="white" stroke-opacity=".65" stroke-width="1.5"/>
      <path d="m17 24 5 5 10-11" stroke="white" stroke-width="2.8"/>
      <circle cx="36" cy="35" r="4" fill="white"/><path d="m34.5 35 1 1 2-2" stroke="var(--fi-main)" stroke-width="1.5"/>
+    </template>
+    <template v-else>
+     <rect x="11" y="13" width="23" height="26" rx="4" fill="var(--fi-main)" opacity=".22"/>
+     <path d="M16 9h13l7 7v17a3 3 0 0 1-3 3H16a3 3 0 0 1-3-3V12a3 3 0 0 1 3-3Z" :fill="`url(#${uid}-paper)`" stroke="var(--fi-main)" stroke-width="1.5"/>
+     <path d="M29 9v7h7M19 22h10m-10 6h7" stroke="var(--fi-main)" stroke-width="1.6"/>
     </template>
    </g>
    <circle class="icon-spark" cx="39" cy="9" r="2" fill="var(--fi-light)"/>
@@ -120,6 +125,15 @@ const styles=computed(()=>({width:`${props.size}px`,height:`${props.size}px`,'--
 </template>
 
 <style scoped>
-/* 整个祖先选择器放进 :global，避免 Vue 编译时丢弃后缀，将透明度/缩放误加给所有按钮。 */
-.feature-icon{display:inline-flex;flex:none;align-items:center;justify-content:center;position:relative;vertical-align:middle;pointer-events:none;line-height:1}.feature-icon>svg{display:block;width:100%;height:100%;overflow:visible;stroke-width:1.5}.icon-body{transform-origin:24px 28px;transition:transform .24s ease}.icon-shadow{transition:opacity .24s ease,transform .24s ease;transform-origin:center}.icon-spark{transform-origin:39px 9px;transition:transform .3s ease,opacity .3s ease}.compact .icon-well{opacity:.95}.compact .icon-glint{opacity:.8}:global(button:hover .feature-icon .icon-body),:global(a:hover .feature-icon .icon-body){transform:translateY(-1.5px) rotate(-2deg)}:global(button:hover .feature-icon .icon-shadow),:global(a:hover .feature-icon .icon-shadow){opacity:.08;transform:scale(.86)}:global(button:hover .feature-icon .icon-spark),:global(a:hover .feature-icon .icon-spark){transform:scale(1.25);opacity:.85}@media(prefers-reduced-motion:reduce){.icon-body,.icon-shadow,.icon-spark{transition:none}:global(button:hover .feature-icon .icon-body),:global(a:hover .feature-icon .icon-body){transform:none}}
+.feature-icon{display:inline-flex;flex:none;align-items:center;justify-content:center;position:relative;vertical-align:middle;pointer-events:none;line-height:1;isolation:isolate}
+.feature-icon>svg{display:block;width:100%;height:100%;overflow:visible;stroke-width:1.5}
+.icon-well{stroke:var(--fi-light);stroke-opacity:.22;stroke-width:.6}
+.icon-body{transform-origin:24px 28px;transition:transform .18s cubic-bezier(.16,1,.3,1)}
+.icon-shadow{transition:opacity .18s,transform .18s cubic-bezier(.16,1,.3,1);transform-origin:center}
+.compact .icon-well{opacity:1}
+.compact .icon-glint{opacity:.85}
+/* These are contextual hover cues; the icons remain still while records are read. */
+:global(button:hover .feature-icon .icon-body),:global(a:hover .feature-icon .icon-body){transform:translateY(-1px)}
+:global(button:hover .feature-icon .icon-shadow),:global(a:hover .feature-icon .icon-shadow){opacity:.08;transform:scale(.9)}
+@media(prefers-reduced-motion:reduce){.icon-body,.icon-shadow{transition:none}:global(button:hover .feature-icon .icon-body),:global(a:hover .feature-icon .icon-body){transform:none}:global(button:hover .feature-icon .icon-shadow),:global(a:hover .feature-icon .icon-shadow){transform:none}}
 </style>

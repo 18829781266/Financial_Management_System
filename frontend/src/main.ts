@@ -7,6 +7,7 @@ import WindowDialog from './components/WindowDialog.vue';
 import { installButtonFeedback } from './buttonFeedback';
 import './style.css';
 import './theme.css';
+import './workspace-theme.css';
 createApp(App).use(ElementPlus,{locale:zhCn}).component('WindowDialog',WindowDialog).mount('#app');
 const removeButtonFeedback = installButtonFeedback();
 if (import.meta.hot) import.meta.hot.dispose(removeButtonFeedback);

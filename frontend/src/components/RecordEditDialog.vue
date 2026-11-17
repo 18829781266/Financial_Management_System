@@ -6,7 +6,7 @@ import VoucherReviewFields from './VoucherReviewFields.vue';
 import type { Voucher, SourceDocument } from '../types';
 const props=defineProps<{modelValue:boolean;kind:'voucher'|'document';record?:Voucher|SourceDocument}>();
 const emit=defineEmits<{'update:modelValue':[boolean];saved:[]}>();
-const form=ref({no:'',period:'',date:'',summary:'',supplier:'',payeeName:'',payerAccount:'',payeeAccount:'',remarks:'',amount:'',invoiceNo:'',contractNo:'',bankNo:'',approvalNo:'',expectedAttachments:'',type:'invoice' as SourceDocument['type'],number:'',seal:false});
+const form=ref({no:'',period:'',date:'',summary:'',supplier:'',payeeName:'',payerAccount:'',payeeAccount:'',remarks:'',amount:'',invoiceNo:'',contractNo:'',bankNo:'',approvalNo:'',expectedAttachments:'',type:'invoice' as SourceDocument['type'],number:'',seal:false,invoiceCarrier:'unknown' as NonNullable<SourceDocument['invoiceCarrier']>,invoiceVerification:'pending' as NonNullable<SourceDocument['invoiceVerification']>,invoiceVerificationBasis:''});
 const error=ref('');
 const pdfVoucher=computed(()=>props.kind==='voucher'&&props.record&&'no' in props.record&&props.record.sourceKind==='pdf-text');
 const entries=computed(()=>props.record&&'no'in props.record?props.record.entries||[]:[]);
@@ -14,7 +14,7 @@ const voucherRecord=computed(()=>props.kind==='voucher'&&props.record&&'no'in pr
 const voucherFields=ref<{save:()=>boolean}>();
 const reviewReasons=computed(()=>props.record?.reviewReasons||[]);
 watch(()=>props.modelValue,open=>{
- if(open&&props.record){const r=props.record;form.value={no:'no'in r?r.no:'',period:'period'in r?r.period:r.date.slice(0,7),date:r.date,summary:'summary'in r?r.summary:'',supplier:'no'in r?r.supplier:r.payerName??r.supplier,payeeName:'payeeName'in r?r.payeeName||'':'',payerAccount:'payerAccount'in r?r.payerAccount||'':'',payeeAccount:'payeeAccount'in r?r.payeeAccount||'':'',remarks:'remarks'in r?r.remarks||'':'',amount:r.amount.toFixed(2),invoiceNo:'invoiceNo'in r?r.invoiceNo||'':'',contractNo:'contractNo'in r?r.contractNo||'':'',bankNo:'bankNo'in r?r.bankNo||'':'',approvalNo:'approvalNo'in r?r.approvalNo||'':'',expectedAttachments:'expectedAttachments'in r&&r.expectedAttachments!==undefined?String(r.expectedAttachments):'',type:'type'in r?r.type:'invoice',number:'number'in r?r.number:'',seal:'seal'in r?r.seal:false};error.value='';}
+ if(open&&props.record){const r=props.record;form.value={no:'no'in r?r.no:'',period:'period'in r?r.period:r.date.slice(0,7),date:r.date,summary:'summary'in r?r.summary:'',supplier:'no'in r?r.supplier:r.payerName??r.supplier,payeeName:'payeeName'in r?r.payeeName||'':'',payerAccount:'payerAccount'in r?r.payerAccount||'':'',payeeAccount:'payeeAccount'in r?r.payeeAccount||'':'',remarks:'remarks'in r?r.remarks||'':'',amount:r.amount.toFixed(2),invoiceNo:'invoiceNo'in r?r.invoiceNo||'':'',contractNo:'contractNo'in r?r.contractNo||'':'',bankNo:'bankNo'in r?r.bankNo||'':'',approvalNo:'approvalNo'in r?r.approvalNo||'':'',expectedAttachments:'expectedAttachments'in r&&r.expectedAttachments!==undefined?String(r.expectedAttachments):'',type:'type'in r?r.type:'invoice',number:'number'in r?r.number:'',seal:'seal'in r?r.seal:false,invoiceCarrier:'type'in r?r.invoiceCarrier||'unknown':'unknown',invoiceVerification:'type'in r?r.invoiceVerification||'pending':'pending',invoiceVerificationBasis:'type'in r?r.invoiceVerificationBasis||'':''};error.value='';}
 });
 function save(){
  if(!props.record)return;
@@ -49,7 +49,14 @@ function save(){
     <div class="form-columns"><el-form-item label="发票号（可选）"><el-input v-model="form.invoiceNo"/></el-form-item><el-form-item label="合同号（可选）"><el-input v-model="form.contractNo"/></el-form-item></div>
     <div class="form-columns"><el-form-item label="银行流水号（可选）"><el-input v-model="form.bankNo"/></el-form-item><el-form-item label="审批单号（可选）"><el-input v-model="form.approvalNo"/></el-form-item></div>
    </template>
-   <template v-else><el-form-item label="单据编号"><el-input v-model="form.number"/></el-form-item><el-checkbox v-if="form.type==='invoice'" v-model="form.seal">已人工核验发票印章</el-checkbox></template>
+   <template v-else><el-form-item label="单据编号"><el-input v-model="form.number"/></el-form-item>
+    <template v-if="form.type==='invoice'">
+     <div class="form-columns"><el-form-item label="发票载体"><el-select v-model="form.invoiceCarrier" aria-label="发票载体"><el-option label="待确认" value="unknown"/><el-option label="数电发票" value="digital"/><el-option label="其他电子发票" value="electronic"/><el-option label="纸质发票扫描件" value="paper"/></el-select></el-form-item><el-form-item label="人工核验结果"><el-select v-model="form.invoiceVerification" aria-label="人工核验结果"><el-option label="尚未核验" value="pending"/><el-option label="人工核验通过" value="passed"/><el-option label="核验未通过" value="failed"/></el-select></el-form-item></div>
+     <el-checkbox v-if="form.invoiceCarrier==='paper'" v-model="form.seal">已对照纸质原件人工核验发票印章</el-checkbox>
+     <el-form-item v-if="form.invoiceCarrier!=='unknown'" :label="form.invoiceCarrier==='paper'?'人工核验依据（登记结果时必填）':'查验或验签依据（电子发票归档必填）'"><el-input v-model="form.invoiceVerificationBasis" aria-label="发票核验依据" type="textarea" :rows="2" placeholder="填写核对的原件、查验平台或验签结果及日期；本系统仅登记人工核验记录"/></el-form-item>
+     <p class="muted-text">数电及电子发票不以可见印章作为统一准入条件；需保留电子原件并登记核验依据。票种不明或核验失败时不得正式归档。</p>
+    </template>
+   </template>
   </el-form>
   <template v-if="entries.length">
    <p class="muted-text">请与原件核对以下分录。回单按每条分录的金额、收款账号及日期关联；零净额及红字需人工核对。</p>

@@ -2,7 +2,7 @@ import {evaluateRules} from './matchingEngine';
 import type {RuleEvaluation,RuleMatch} from './matchingEngine';
 import {evaluateNameAssociations} from './nameAssociation';
 import {evaluateEntryAttachments,RECEIPT_RULE_ID,requiredReceiptEntries,subjectAccounts} from './entryAttachments';
-import {documentRemainingCents,isReferenceDocument} from './evidenceRelations';
+import {centsToAmount,documentAllocatedCents,documentRemainingCents,isReferenceDocument} from './evidenceRelations';
 import type {EntryAttachment} from './types';
 import type {MatchRule,NameAssociation,SourceDocument,Voucher} from './types';
 
@@ -15,7 +15,10 @@ export type MatchEvaluationResponse={ok:true;plan:MatchPlan}|{ok:false;message:s
 function projectedDocuments(vouchers:Voucher[],documents:SourceDocument[]):SourceDocument[] {
  return documents.map(document=>{
   if(isReferenceDocument(document))return document;
-  try{return {...document,status:documentRemainingCents(document,vouchers)===0?'matched' as const:'pending' as const};}catch{return document;}
+  try{
+   const remaining=documentRemainingCents(document,vouchers);
+   return {...document,status:remaining===0?'matched' as const:'pending' as const,remainingAmount:centsToAmount(remaining),allocatedAmount:centsToAmount(documentAllocatedCents(document,vouchers))};
+  }catch{return document;}
  });
 }
 
@@ -25,7 +28,7 @@ function projectedDocuments(vouchers:Voucher[],documents:SourceDocument[]):Sourc
  */
 export function computeMatchPlan(input:MatchEvaluationInput):MatchPlan {
  const receiptRule=input.rules.find(rule=>rule.id===RECEIPT_RULE_ID);
- const entryVouchers=receiptRule?input.vouchers.filter(voucher=>voucher.entries?.some(entry=>subjectAccounts(entry.account).length)&&voucher.status!=='matched'):[];
+ const entryVouchers=receiptRule?input.vouchers.filter(voucher=>voucher.status==='pending'&&voucher.entries?.some(entry=>subjectAccounts(entry.account).length)):[];
  const entries=receiptRule?evaluateEntryAttachments(entryVouchers,input.documents,receiptRule,input.vouchers):undefined;
  const entryByVoucher=new Map((entries?.matches||[]).map(match=>[match.voucherId,match]));
  const snapshots=input.vouchers.map(voucher=>{

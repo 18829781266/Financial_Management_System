@@ -8,7 +8,7 @@ export const ACCOUNT_TAIL_LENGTH=4;
 export const FULL_ACCOUNT_MIN_LENGTH=8;
 export const RECEIPT_DATE_WINDOW=30;
 export function receiptEntryRule():MatchRule {
- return {id:RECEIPT_RULE_ID,name:'回单分录分摊匹配',description:'按收付方向、账号与日期建立候选；唯一方案可一对多、多对一或部分分摊，歧义交人工复核',priority:1,enabled:true,threshold:100,tolerance:0,dateWindow:30,matchType:'exact',conditions:{associationScope:'voucher',documentTypes:['bank'],requireAmount:true,requireDate:true}};
+ return {id:RECEIPT_RULE_ID,name:'回单分录分摊匹配',description:'核对往来对象、收付方向、账号与日期；整份余额组合唯一时自动关联，部分分摊与歧义交人工复核',priority:1,enabled:true,threshold:100,tolerance:0,dateWindow:30,matchType:'exact',conditions:{associationScope:'voucher',documentTypes:['bank'],requireAmount:true,requireDate:true}};
 }
 
 /** 不把空值、流水号或四位会计科目代码当成银行账号。 */
@@ -96,13 +96,40 @@ export interface EntryEvaluation extends RuleEvaluation {matches:EntryMatch[];do
 interface EntryNode {key:string;voucher:Voucher;entryIndex:number;side:'debit'|'credit';remaining:number}
 interface DocumentNode {document:SourceDocument;remaining:number}
 
+/** 自动核销保留完整法律主体名称，不剥离集团、股份或公司后缀。 */
+const canonicalParty=(value:unknown)=>String(value||'').normalize('NFKC').replace(/\s+/g,'').toLowerCase();
+function entryParty(voucher:Voucher,entryIndex:number):{name?:string;reason?:string} {
+ const own=canonicalParty(voucher.company),entry=voucher.entries?.[entryIndex];
+ const auxiliary=(voucher.entries||[]).flatMap(item=>{
+  if(!/^(?:\s*(?:1122|1123|1221|2202|2203|2241)\b)|应收|应付|往来/.test(item.account))return [];
+  const name=item.account.match(/_[^.\s]+\.(.+)$/)?.[1]?.trim();
+  return name&&!/^(待抵扣|暂估|其他|内部往来)$/.test(name)?[name]:[];
+ });
+ const names=[entry?.counterparty,...auxiliary,voucher.supplier].map(canonicalParty).filter(name=>name&&name!==own);
+ const unique=[...new Set(names)];
+ if(unique.length>1)return {reason:'分录辅助客商与凭证客商不一致或存在多个往来对象，请人工复核'};
+ if(!unique.length)return {reason:'未能确认分录的外部往来客商，请人工复核'};
+ return {name:unique[0]};
+}
+export function entryCounterpartyIssue(voucher:Voucher,entryIndex:number,document:SourceDocument,side:'debit'|'credit'):string|undefined {
+ const expected=entryParty(voucher,entryIndex);
+ if(expected.reason)return expected.reason;
+ const external=side==='debit'?(document.payerName===undefined?document.supplier:document.payerName):document.payeeName;
+ if(!canonicalParty(external))return `回单${side==='debit'?'付款人':'收款人'}缺失，无法确认外部往来客商，请人工复核`;
+ if(canonicalParty(external)!==expected.name)return '回单外部往来客商与分录客商不一致，代收代付等特殊业务请人工复核';
+ const reference=voucher.entries?.[entryIndex]?.bankNo||voucher.bankNo;
+ const normalizeId=(value:unknown)=>String(value||'').normalize('NFKC').replace(/\s+/g,'').toUpperCase();
+ if(reference&&![document.bankNo,document.receiptNo,document.number].some(value=>normalizeId(value)===normalizeId(reference)))return '分录指定的银行流水或回单标识不一致，请人工复核';
+ return undefined;
+}
+
 /**
  * 全局候选按连通分量处理。只有金额分配被拓扑与合计唯一确定时才自动提交：
- * 一对一可取部分金额；一对多要求回单合计不超过分录；多对一要求一张回单覆盖全部
- * 候选分录。更复杂的多对多及同分候选一律交人工，避免顺序抢占造成错误核销。
+ * 自动关联只消费整份回单剩余额度，不擅自从大额回单截取金额；多对一要求回单余额
+ * 恰好覆盖全部候选分录。部分分摊、多对多及同分候选交人工，避免顺序抢占。
  */
 export function evaluateEntryAttachments(vouchers:Voucher[],documents:SourceDocument[],rule:MatchRule,allocationVouchers:Voucher[]=vouchers):EntryEvaluation {
- const documentOutcomes=new Map<string,string>(),blocked=new Map<string,string>();
+ const documentOutcomes=new Map<string,string>(),blocked=new Map<string,string>(),candidateIssues=new Map<string,string>();
  const entryNodes=new Map<string,EntryNode>(),documentNodes=new Map<string,DocumentNode>();
  const adjacency=new Map<string,Set<string>>();
  const configuredTypes=new Set(rule.conditions?.documentTypes||['bank']);
@@ -118,6 +145,7 @@ export function evaluateEntryAttachments(vouchers:Voucher[],documents:SourceDocu
   else if(!voucher.entries?.length)reason='凭证缺少逐行分录，请补录摘要、科目及借贷金额后复核';
   else if(voucher.autoMatchBlockedReasons?.some(value=>/借贷合计|续页/.test(value)))reason='原始分录金额或续页异常，请人工复核';
   else if(voucher.entries.some(entry=>!entryMoney(entry)))reason='存在零金额、双边金额或无效分录，请人工复核';
+  else if(voucher.entries.some(entry=>entryMoney(entry)!.cents<0)&&voucher.businessType!=='red-letter')reason='负数分录尚未标识红字业务，请人工复核';
   else if(!voucher.entries.some(entry=>subjectAccounts(entry.account).length))reason='凭证科目未读取到收付款账号或至少4位尾号，请人工复核';
   else {
    try{
@@ -145,22 +173,30 @@ export function evaluateEntryAttachments(vouchers:Voucher[],documents:SourceDocu
   let remaining=0;
   // 候选凭证可以只包含本轮未完成记录，但余额必须扣除所有凭证（含已完成、
   // 其他期间及人工分摊）的占用，否则旧回单会重新进入候选并制造歧义或争用。
-  try{remaining=documentRemainingCents(document,allocationVouchers);}catch{reason='回单金额无效，请人工复核';}
+  try{
+   const original=amountCents(document.amount);
+   remaining=documentRemainingCents(document,allocationVouchers);
+   if(original<0&&document.documentStatus!=='red-letter')reason='负数回单尚未标识红字业务，请人工复核';
+   if(remaining&&Math.sign(remaining)!==Math.sign(original)||Math.abs(remaining)>Math.abs(original))reason='回单历史分摊已超额或金额方向异常，请人工复核';
+  }catch{reason='回单金额无效，请人工复核';}
   const date=businessDate(document.date);
   if(!reason&&(!remaining||!Number.isFinite(date)))reason='回单剩余金额或业务日期缺失，请人工复核';
   if(reason){documentOutcomes.set(document.id,reason);continue;}
   if(!remaining)continue;
   documentNodes.set(document.id,{document,remaining});
-  let accountCandidate=false,dateCandidate=false;
+  let accountCandidate=false,dateCandidate=false,partyIssue='';
   for(const node of entryNodes.values()){
    if(Math.sign(node.remaining)!==Math.sign(remaining))continue;
    const account=entryAccount(document,node.side);
    if(!accountInSubject(account,node.voucher.entries![node.entryIndex]!.account))continue;
    accountCandidate=true;
    if(Math.abs(date-businessDate(node.voucher.date))/86400000>=RECEIPT_DATE_WINDOW)continue;
-   dateCandidate=true;connect(node.key,document.id);
+   dateCandidate=true;
+   const issue=entryCounterpartyIssue(node.voucher,node.entryIndex,document,node.side);
+   if(issue){partyIssue=issue;candidateIssues.set(node.voucher.id,issue);continue;}
+   connect(node.key,document.id);
   }
-  if(!adjacency.get(document.id)?.size)documentOutcomes.set(document.id,accountCandidate?'回单与凭证日期差达到或超过30天，请人工复核':dateCandidate?'收付款方向或金额符号不一致，请人工复核':'金额可分摊，但对应方向的收付款账号或尾号未在科目中命中');
+  if(!adjacency.get(document.id)?.size)documentOutcomes.set(document.id,partyIssue||(accountCandidate&&!dateCandidate?'回单与凭证日期差达到或超过30天，请人工复核':'金额可分摊，但对应方向的收付款账号或尾号未在科目中命中'));
  }
  const visited=new Set<string>(),linksByVoucher=new Map<string,EntryAttachment[]>();
  // 按单据输入顺序遍历，保持旧版结果稳定，同时不以顺序决定有歧义的分配。
@@ -179,43 +215,42 @@ export function evaluateEntryAttachments(vouchers:Voucher[],documents:SourceDocu
   documentIds.add(document.id);
   for(const key of adjacency.get(document.id)||[])if(entryNodes.has(key))entryKeys.add(key);
   const entries=[...entryKeys].map(key=>entryNodes.get(key)!),docs=[...documentIds].map(id=>documentNodes.get(id)!);
+  if(!entries.length)continue;
   const proposed:{node:EntryNode;document:SourceDocument;cents:number}[]=[];
-  let ambiguous=false;
+  let ambiguous=false,partial=false;
   if(entries.length===1&&docs.length===1){
-   const entry=entries[0]!,doc=docs[0]!,cents=Math.sign(entry.remaining)*Math.min(Math.abs(entry.remaining),Math.abs(doc.remaining));
-   proposed.push({node:entry,document:doc.document,cents});
+   const entry=entries[0]!,doc=docs[0]!;
+   if(Math.abs(doc.remaining)<=Math.abs(entry.remaining))proposed.push({node:entry,document:doc.document,cents:doc.remaining});
+   else {ambiguous=true;partial=true;}
   }else if(entries.length===1){
-   const entry=entries[0]!,target=Math.abs(entry.remaining),capacity=docs.reduce((sum,doc)=>sum+Math.abs(doc.remaining),0),exact=docs.filter(doc=>Math.abs(doc.remaining)===target);
-   if(exact.length===1)proposed.push({node:entry,document:exact[0]!.document,cents:exact[0]!.remaining});
-   else if(exact.length>1)ambiguous=true;
+   const entry=entries[0]!,target=Math.abs(entry.remaining),capacity=docs.reduce((sum,doc)=>sum+Math.abs(doc.remaining),0);
+   if(!Number.isSafeInteger(capacity))ambiguous=true;
    else if(capacity<target)for(const doc of docs)proposed.push({node:entry,document:doc.document,cents:doc.remaining});
-   else if(docs.length<=12){
-    // 搜索“若干整份回单＋至多一份部分回单”的精确解；两个解即转人工。
-    const solutions:{doc:DocumentNode;cents:number}[][]=[];
-    const sign=Math.sign(entry.remaining),size=docs.length,limit=1<<size;
-    for(let mask=0;mask<limit&&solutions.length<=1;mask++){
-     let sum=0;const full:DocumentNode[]=[];
-     for(let index=0;index<size;index++)if(mask&(1<<index)){sum+=Math.abs(docs[index]!.remaining);full.push(docs[index]!);}
-     if(sum>target)continue;
-     if(sum===target){solutions.push(full.map(doc=>({doc,cents:doc.remaining})));continue;}
-     const residual=target-sum;
-     for(let index=0;index<size;index++){
-      if(mask&(1<<index))continue;const doc=docs[index]!,available=Math.abs(doc.remaining);
-      // 等于剩余额度的整份解会由另一个 mask 覆盖，避免重复计数。
-      if(available>residual)solutions.push([...full.map(item=>({doc:item,cents:item.remaining})),{doc,cents:sign*residual}]);
-      if(solutions.length>1)break;
-     }
-    }
-    if(solutions.length===1)for(const item of solutions[0]!)proposed.push({node:entry,document:item.doc.document,cents:item.cents});
-    else ambiguous=true;
+   else if(docs.length<=20){
+    // 单张整额与多张组合一起搜索；不能先选整额而漏掉40+60等替代完整解。
+    const solutions:DocumentNode[][]=[],sorted=[...docs].sort((left,right)=>Math.abs(right.remaining)-Math.abs(left.remaining));
+    const suffix=Array(sorted.length+1).fill(0) as number[];
+    for(let i=sorted.length-1;i>=0;i--)suffix[i]=suffix[i+1]!+Math.abs(sorted[i]!.remaining);
+    const visit=(index:number,total:number,chosen:DocumentNode[])=>{
+     if(solutions.length>1||total>target||total+suffix[index]!<target)return;
+     if(total===target){solutions.push(chosen);return;}
+     if(index===sorted.length)return;
+     visit(index+1,total+Math.abs(sorted[index]!.remaining),[...chosen,sorted[index]!]);
+     visit(index+1,total,chosen);
+    };
+    visit(0,0,[]);
+    if(solutions.length===1)for(const doc of solutions[0]!)proposed.push({node:entry,document:doc.document,cents:doc.remaining});
+    else {ambiguous=true;partial=solutions.length===0;}
    }else ambiguous=true;
   }else if(docs.length===1){
    const doc=docs[0]!,target=entries.reduce((sum,entry)=>sum+Math.abs(entry.remaining),0);
-   if(Math.abs(doc.remaining)>=target)for(const entry of entries)proposed.push({node:entry,document:doc.document,cents:entry.remaining});
-   else ambiguous=true;
+   if(Number.isSafeInteger(target)&&Math.abs(doc.remaining)===target)for(const entry of entries)proposed.push({node:entry,document:doc.document,cents:entry.remaining});
+   else {ambiguous=true;partial=Math.abs(doc.remaining)>target;}
   }else ambiguous=true;
   if(ambiguous){
-   for(const doc of docs)documentOutcomes.set(doc.document.id,entries.length>1?'金额、账号及日期命中多条分录，分摊方案不唯一，请人工复核':'同一分录存在多种回单分摊组合，请人工确认');
+   const reason=partial?'回单需要部分分摊，缺少明确分配依据，请人工确认金额':entries.length>1?'金额、账号、客商及日期命中多条分录，分摊方案不唯一，请人工复核':'同一分录存在多种回单分摊组合，请人工确认';
+   for(const doc of docs)documentOutcomes.set(doc.document.id,reason);
+   for(const entry of entries)candidateIssues.set(entry.voucher.id,reason);
   }else for(const {node,document:doc,cents} of proposed){
    const links=linksByVoucher.get(node.voucher.id)||[];
    links.push({entryIndex:node.entryIndex,documentId:doc.id,side:node.side,ruleId:'R09',allocatedAmount:centsToAmount(cents),relationType:'settlement'});
@@ -228,7 +263,7 @@ export function evaluateEntryAttachments(vouchers:Voucher[],documents:SourceDocu
   const links=[...(voucher.entryAttachments||[]),...generated];
   const complete=attachmentCoverage(voucher,links,documents);
   if(generated.length)matches.push({voucherId:voucher.id,documentIds:[...new Set(links.map(link=>link.documentId))],entryAttachments:links,complete,ruleId:'R09',confidence:100});
-  return {voucherId:voucher.id,matched:complete,ruleId:'R09',reason:blocked.get(voucher.id)||(complete?'已按唯一分摊方案核对金额、收付方向、账号及日期':links.length?'部分分录已关联，其余分录或剩余金额请人工复核':'未找到唯一的回单分摊方案，请人工复核')};
+  return {voucherId:voucher.id,matched:complete,ruleId:'R09',reason:blocked.get(voucher.id)||(complete?'已按唯一整份余额方案核对金额、客商、收付方向、账号及日期':links.length?'部分分录已关联，其余分录或剩余金额请人工复核':candidateIssues.get(voucher.id)||'未找到唯一的回单分摊方案，请人工复核')};
  });
  return {matches,outcomes,documentOutcomes:[...documentOutcomes].map(([documentId,reason])=>({documentId,reason}))};
 }

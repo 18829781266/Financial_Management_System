@@ -11,7 +11,7 @@ let store=useArchiveStore();
 const pdf=(name='reset.pdf')=>new File(['%PDF-1.7 synthetic'],name,{type:'application/pdf'});
 async function populate(){
  await store.importVoucherBatch([{file:pdf(),values:{no:'清空-1',period:'2026-06',date:'2026-06-01',summary:'合成清空测试',supplier:'合成公司',amount:100}}]);
- const doc=await store.addDocument(pdf('original.pdf'),{type:'invoice',date:'2026-06-01',supplier:'合成公司',payerName:'合成公司',amount:100,number:'CLEAR-1',seal:true,extractionStatus:'reviewed'});
+ const doc=await store.addDocument(pdf('original.pdf'),{type:'invoice',invoiceCarrier:'paper',date:'2026-06-01',supplier:'合成公司',payerName:'合成公司',amount:100,number:'CLEAR-1',seal:true,extractionStatus:'reviewed'});
  const voucher=store.state.vouchers[0]!;store.manualMatch(voucher.id,[doc.id],'合成核对');
  const archive=store.generateArchive({period:'2026-06',startVoucherNo:voucher.no,endVoucherNo:voucher.no});archive.fileId='archive-pdf';
  await files.saveFiles([{id:'archive-pdf',file:pdf('archive.pdf')},{id:'orphan-file',file:pdf('orphan.pdf')}]);

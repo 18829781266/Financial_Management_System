@@ -1,5 +1,6 @@
 import {amountCents} from './money';
 import {normalizeSupplier,supplierSimilarity} from './matchUtils';
+import {documentRemainingCents} from './evidenceRelations';
 import type {MatchRule,SourceDocument,Voucher} from './types';
 
 type DocumentType=SourceDocument['type'];
@@ -171,6 +172,11 @@ export function evaluateRules(vouchers:Voucher[],documents:SourceDocument[],rule
  const outcomes=new Map<string,Diagnostic>(),stopped=new Set<string>(),matched=new Set<string>(),referenced=new Set<string>();
  const used=new Set(vouchers.filter(voucher=>voucher.status==='matched').flatMap(voucher=>voucher.documentIds).filter(id=>documents.some(doc=>doc.id===id&&!isReferenceType(doc.type))));
  const matches:RuleMatch[]=[];
+ const whollyAvailable=(document:SourceDocument):boolean=>{
+  if(isReferenceType(document.type))return true;
+  // status=pending 还可能表示已被部分分摊。整凭证规则不能再次按原总额认领。
+  try{return documentRemainingCents(document,vouchers)===amountCents(document.amount);}catch{return false;}
+ };
  const remember=(voucherId:string,diagnostic:Diagnostic)=>{const previous=outcomes.get(voucherId);if(!previous||diagnostic.stage>previous.stage)outcomes.set(voucherId,diagnostic);};
  for(const voucher of pending){const issue=voucherIssue(voucher);if(issue){stopped.add(voucher.id);outcomes.set(voucher.id,{stage:8,reason:issue});}}
  const enabled=[...rules].filter(rule=>rule.enabled&&rule.conditions?.associationScope!=='party').sort((left,right)=>left.priority-right.priority||left.id.localeCompare(right.id));
@@ -182,7 +188,7 @@ export function evaluateRules(vouchers:Voucher[],documents:SourceDocument[],rule
    if(stopped.has(voucher.id)||matched.has(voucher.id))continue;
    // 已有分录的凭证由 R09 管理银行证据，不能再被整凭证回单规则重复消费。
    if((rule.id==='R03'||rule.id==='R06')&&voucher.entries?.length)continue;
-   const allowed=ruleTypes(rule),typed=documents.filter(doc=>allowed.includes(doc.type)&&(isReferenceType(doc.type)||(doc.status==='pending'&&!used.has(doc.id))));
+   const allowed=ruleTypes(rule),typed=documents.filter(doc=>allowed.includes(doc.type)&&(isReferenceType(doc.type)||(doc.status==='pending'&&!used.has(doc.id)&&whollyAvailable(doc))));
    const valid=typed.filter(doc=>!documentIssue(doc));
    // 开启日期校验时允许在规则窗口内跨期；关闭日期校验仍只允许同期间，避免无限扩大候选。
    const pool=valid.filter(doc=>rule.conditions?.requireDate===false?doc.date.startsWith(voucher.period):true);

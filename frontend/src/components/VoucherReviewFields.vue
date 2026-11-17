@@ -5,7 +5,7 @@ import {CheckCircle2,ClipboardCheck} from 'lucide-vue-next';
 import {useArchiveStore} from '../store';
 import type {Voucher} from '../types';
 
-const props=withDefaults(defineProps<{voucher:Voucher;showHeading?:boolean;showSaveAction?:boolean}>(),{showHeading:true,showSaveAction:true});
+const props=withDefaults(defineProps<{voucher:Voucher;showHeading?:boolean;showSaveAction?:boolean;disabled?:boolean}>(),{showHeading:true,showSaveAction:true,disabled:false});
 const emit=defineEmits<{saved:[]}>();
 const store=useArchiveStore();
 const saving=ref(false),error=ref(''),supplierError=ref('');
@@ -16,8 +16,8 @@ watch(()=>props.voucher.id,()=>{
  error.value='';
 },{immediate:true});
 const pdfVoucher=()=>props.voucher.sourceKind==='pdf-text';
-function save():boolean{
- if(saving.value)return false;
+function save(options:{emitSaved?:boolean;notify?:boolean}={}):boolean{
+ if(saving.value||props.disabled)return false;
  supplierError.value='';error.value='';
  if(!form.value.supplier.trim()){
   supplierError.value='请填写往来客商名称，保存后将按此名称归入电子档案';
@@ -27,8 +27,8 @@ function save():boolean{
  try{
   store.updateVoucher(props.voucher.id,form.value);
   const remainsPending=props.voucher.reviewStatus==='pending';
-  emit('saved');
-  if(remainsPending)ElMessage.info('字段已保存，仍有关联信息待复核');else ElMessage.success('凭证字段已保存并复核');
+  if(options.emitSaved!==false)emit('saved');
+  if(options.notify!==false){if(remainsPending)ElMessage.info('字段已保存，仍有关联信息待复核');else ElMessage.success('凭证字段已保存并复核');}
   return true;
  }catch(e){error.value=e instanceof Error?e.message:'保存失败';return false;}
  finally{saving.value=false;}
@@ -45,14 +45,14 @@ defineExpose({save});
   </div>
   <el-alert v-if="error" :title="error" type="error" :closable="false" show-icon class="field-review-alert"/>
   <el-alert v-if="voucher.reviewReasons?.length" :title="voucher.reviewReasons.join('；')" type="warning" :closable="false" show-icon class="field-review-alert"/>
-  <el-form label-position="top" class="voucher-review-form" @submit.prevent>
+  <el-form label-position="top" class="voucher-review-form" :disabled="disabled||saving" @submit.prevent>
    <div class="form-columns"><el-form-item label="凭证号"><el-input v-model="form.no"/></el-form-item><el-form-item label="会计期间"><el-input v-model="form.period" placeholder="YYYY-MM"/></el-form-item></div>
    <el-form-item label="摘要"><el-input v-model="form.summary"/></el-form-item>
    <div class="form-columns"><el-form-item label="往来客商名称（必填）" required :error="supplierError"><el-input v-model="form.supplier" placeholder="填写原件中的客户、供应商或其他往来单位" aria-required="true" @input="supplierError=''"/><div class="field-help">用于电子档案按客商归集，请填写完整单位名称，不要填写内部部门或简称。</div></el-form-item><el-form-item label="日期"><el-input v-model="form.date" placeholder="YYYY-MM-DD"/></el-form-item></div>
    <div class="form-columns"><el-form-item :label="pdfVoucher()?'凭证合计（元，来自原始分录）':'金额（元）'"><el-input v-model="form.amount" :readonly="pdfVoucher()" placeholder="未录入"/></el-form-item><el-form-item label="附件数（未知可留空）"><el-input v-model="form.expectedAttachments" placeholder="未注明"/></el-form-item></div>
    <div class="form-columns"><el-form-item label="发票号（可选）"><el-input v-model="form.invoiceNo"/></el-form-item><el-form-item label="合同号（可选）"><el-input v-model="form.contractNo"/></el-form-item></div>
    <div class="form-columns"><el-form-item label="银行流水号（可选）"><el-input v-model="form.bankNo"/></el-form-item><el-form-item label="审批单号（可选）"><el-input v-model="form.approvalNo"/></el-form-item></div>
-   <div v-if="showSaveAction" class="field-review-actions"><span><ClipboardCheck :size="15"/>保存只确认字段，不会代替附件匹配</span><button type="button" class="btn primary" :disabled="saving" @click="save">{{saving?'正在保存…':'保存并复核字段'}}</button></div>
+   <div v-if="showSaveAction" class="field-review-actions"><span><ClipboardCheck :size="15"/>保存只确认字段，不会代替附件匹配</span><button type="button" class="btn primary" :disabled="saving||disabled" @click="save()">{{saving?'正在保存…':'保存并复核字段'}}</button></div>
   </el-form>
  </section>
 </template>

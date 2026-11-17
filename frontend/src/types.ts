@@ -53,6 +53,11 @@ export interface Voucher {
   expectedAttachments?: number;
   fileId?: string;
   fileName?: string;
+  /** 上传原件的本地入库摘要；不等同于外部可信时间戳或服务端不可变存证。 */
+  sourceHash?:string;
+  sourceSize?:number;
+  sourceHashRecordedAt?:string;
+  sourceHashMode?:'ingested'|'legacy-registered';
   sourceKind?: 'pdf-text';
   sourcePages?: number[];
   company?: string;
@@ -76,6 +81,9 @@ export interface Voucher {
   lastMatchReason?: string;
   lastMatchRuleId?: string;
 }
+
+export type InvoiceCarrier='unknown'|'digital'|'electronic'|'paper';
+export type InvoiceVerification='pending'|'passed'|'failed';
 
 export interface SourceDocument {
   nameAssociationIds?:string[];
@@ -111,6 +119,13 @@ export interface SourceDocument {
   date: string;
   number: string;
   seal: boolean;
+  /** 待确认、数电、其他电子发票、纸票扫描件分别执行归档策略。 */
+  invoiceCarrier?:InvoiceCarrier;
+  /** 人工登记结果，不代表系统已自动接入税务查验或完成验签。 */
+  invoiceVerification?:InvoiceVerification;
+  invoiceVerificationBasis?:string;
+  invoiceCheckedAt?:string;
+  invoiceCheckedBy?:string;
   status: 'matched' | 'pending';
   matchReviewRequired?: boolean;
   lastMatchReason?: string;
@@ -119,12 +134,17 @@ export interface SourceDocument {
   confidence?: number;
   /** 本地上传不会假装执行 OCR，必须补录并复核结构化字段。 */
   extractionStatus?: 'pending' | 'reviewed';
+  /** 上传原件的本地入库摘要；不等同于外部可信时间戳或服务端不可变存证。 */
+  sourceHash?:string;
+  sourceSize?:number;
+  sourceHashRecordedAt?:string;
+  sourceHashMode?:'ingested'|'legacy-registered';
   sourceKind?: 'pdf-text';
   sourcePages?: number[];
   reviewReasons?: string[];
 }
 
-export interface ArchiveRecord {kind:'voucher'|'document';no:string;date:string;supplier:string;amount:number;summary:string;fileId?:string;fileName?:string}
+export interface ArchiveRecord {kind:'voucher'|'document';recordId?:string;no:string;date:string;supplier:string;amount:number;summary:string;fileId?:string;fileName?:string;sourceHash?:string;sourceSize?:number}
 
 export interface ArchiveBook {
   id: string;
@@ -137,6 +157,9 @@ export interface ArchiveBook {
   amount: number;
   createdAt: string;
   status: 'locked';
+  /** 新档案固化成员和阅读元数据，后续工作区变化不能改变已生成PDF的成员。 */
+  voucherIds?:string[];
+  records?:ArchiveRecord[];
   /** 仅真实生成 PDF 字节并计算后才允许填写。演示记录为空。 */
   hash?: string;
   fileId?: string;

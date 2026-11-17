@@ -16,7 +16,7 @@ async function addVoucher(no:string,amounts:number[],date='2026-09-30',businessT
   ...amounts.map((amount,index)=>({summary:`银行分录${index+1}`,account:'1002 银行存款_尾号3325',debit:amount.toFixed(2),credit:'0.00'})),
   {summary:'往来对方科目',account:'2202 应付账款',debit:'0.00',credit:total.toFixed(2)},
  ];
- await store.importVouchers(new File([JSON.stringify([{no,period:date.slice(0,7),date,summary:'分摊场景测试',supplier:'合成测试客商',amount:total.toFixed(2),businessType,entries}])],`${no}.json`,{type:'application/json'}));
+ await store.importVoucherBatch([{values:{no,period:date.slice(0,7),date,summary:'分摊场景测试',supplier:'合成测试客商',amount:total.toFixed(2),businessType,entries},file:file(`${no}.pdf`)}]);
  return store.state.vouchers.find(voucher=>voucher.no===no)!;
 }
 async function addBank(no:string,amount:number,date='2026-10-01',documentStatus:'normal'|'red-letter'|'void'='normal'){
@@ -60,9 +60,11 @@ describe('凭证据链分摊场景矩阵',()=>{
   store.reconcileEntryAllocations(secondVoucher.id,0,[allocation(first.id,'20.00'),allocation(second.id,'80.00')],'核对多对多剩余额度');
   expect(firstVoucher.status).toBe('matched');expect(secondVoucher.status).toBe('matched');expect(first.remainingAmount).toBe('0.00');expect(second.remainingAmount).toBe('0.00');
  });
- it('部分分摊保留剩余额度，后续凭证只能使用余额',async()=>{
+ it('未经确认不自动截取大额回单，人工部分分摊后后续凭证只能使用余额',async()=>{
   const firstVoucher=await addVoucher('部分-A',[100]),receipt=await addBank('PART-150',150);
   await store.autoMatch();
+  expect(firstVoucher.status).toBe('pending');expect(firstVoucher.entryAttachments||[]).toEqual([]);
+  store.reconcileEntryAllocations(firstVoucher.id,0,[allocation(receipt.id,'100.00')],'核对原件确认本次仅分摊100元');
   expect(firstVoucher.status).toBe('matched');expect(receipt.status).toBe('pending');expect(receipt.allocatedAmount).toBe('100.00');expect(receipt.remainingAmount).toBe('50.00');
   const secondVoucher=await addVoucher('部分-B',[50],'2026-10-02');await store.autoMatch();
   expect(secondVoucher.status).toBe('matched');expect(receipt.remainingAmount).toBe('0.00');expect(receipt.status).toBe('matched');
@@ -104,7 +106,7 @@ describe('凭证据链分摊场景矩阵',()=>{
  });
  it('解除一张凭证只释放自己的分摊，其他凭证关系保留',async()=>{
   const firstVoucher=await addVoucher('解绑-A',[100]),receipt=await addBank('UNBIND-150',150);
-  await store.autoMatch();const secondVoucher=await addVoucher('解绑-B',[50],'2026-10-02');await store.autoMatch();
+  store.reconcileEntryAllocations(firstVoucher.id,0,[allocation(receipt.id,'100.00')],'首张凭证100元的业务分配已核对');const secondVoucher=await addVoucher('解绑-B',[50],'2026-10-02');await store.autoMatch();
   expect(receipt.status).toBe('matched');store.unmatchVoucher(firstVoucher.id,'首张凭证重新复核');
   expect(firstVoucher.status).toBe('pending');expect(secondVoucher.status).toBe('matched');expect(secondVoucher.documentIds).toEqual([receipt.id]);
   expect(receipt.allocatedAmount).toBe('50.00');expect(receipt.remainingAmount).toBe('100.00');expect(receipt.status).toBe('pending');

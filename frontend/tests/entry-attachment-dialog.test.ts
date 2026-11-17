@@ -57,12 +57,12 @@ describe('凭证附件弹窗的可见内容',()=>{
  it('唯一金额、账号和日期候选直接显示在对应分录附件栏',async()=>{
   const {voucher,documents}=data();voucher.status='pending';voucher.documentIds=[];voucher.entryAttachments=[];voucher.amount=100;voucher.entries[0]!.account='1002 银行_尾号3325';voucher.entries=[voucher.entries![0]!,{summary:'对方科目',account:'2202 应付账款',debit:'0.00',credit:'100.00'}];
   documents.splice(0,documents.length,{id:'d-first',name:'first-receipt.pdf',supplier:'付款单位',type:'bank',amount:100,date:'2026-10-01',number:'BANK-ONLY',seal:false,status:'pending',payeeAccount:'3325'});
-  const html=await render(voucher,documents);expect(html).toContain('first-receipt.pdf');expect(html).toContain('唯一金额候选 · 金额、账号及日期一致');expect(html).toContain('调整关联 / 分摊');expect(voucher.documentIds).toEqual([]);expect(voucher.status).toBe('pending');
+  const html=await render(voucher,documents);expect(html).toContain('first-receipt.pdf');expect(html).toContain('唯一关联候选 · 客商、金额、账号及日期一致');expect(html).toContain('调整关联 / 分摊');expect(voucher.documentIds).toEqual([]);expect(voucher.status).toBe('pending');
  });
  it('同额歧义候选不冒充已确定附件，仍保留人工复核',async()=>{
   const {voucher,documents}=data();voucher.status='pending';voucher.documentIds=[];voucher.entryAttachments=[];voucher.amount=100;voucher.entries[0]!.account='1002 银行_尾号3325';voucher.entries=[voucher.entries![0]!,{summary:'对方科目',account:'2202 应付账款',debit:'0.00',credit:'100.00'}];
   documents.splice(0,documents.length,...['a','b'].map(id=>({id:`d-${id}`,name:`${id}-receipt.pdf`,supplier:'付款单位',type:'bank' as const,amount:100,date:'2026-10-01',number:id,seal:false,status:'pending' as const,payeeAccount:'3325'})));
-  const html=await render(voucher,documents);expect(html).not.toContain('唯一金额候选');expect(html).not.toContain('a-receipt.pdf');expect(html).toContain('未关联 · 请复核');expect(html).toContain('人工复核 / 分摊');
+  const html=await render(voucher,documents);expect(html).not.toContain('唯一关联候选');expect(html).not.toContain('a-receipt.pdf');expect(html).toContain('未关联 · 请复核');expect(html).toContain('人工复核 / 分摊');
  });
  it('主弹窗去掉独立无附件按钮，合并复核时从底部保存进入二次确认',async()=>{
   const {voucher,documents}=data();voucher.documentIds=[];voucher.entryAttachments=[];voucher.status='pending';
@@ -71,6 +71,6 @@ describe('凭证附件弹窗的可见内容',()=>{
   app.component('ElDialog',Dialog);app.component('ElTooltip',Tooltip);app.component('WindowDialog',WindowDialog);app.component('ElTable',Table);app.component('ElTableColumn',Column);
   for(const name of ['ElAlert','ElForm','ElFormItem','ElSelect','ElOption','ElInput'])app.component(name,Column);
   app.component('VoucherReviewFields',defineComponent({setup:()=>()=>h('div','凭证字段表单')}));
-  const combined=await renderToString(app);expect(combined).toContain('<footer>');expect(combined.slice(combined.indexOf('<footer>'))).toContain('保存并复核字段');
+  const combined=await renderToString(app);expect(combined).toContain('<footer>');expect(combined.slice(combined.indexOf('<footer>'))).toContain('保存并复核');
  });
 });

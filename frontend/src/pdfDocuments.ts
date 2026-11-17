@@ -4,6 +4,8 @@ import {normalizeBankAccount} from './entryAttachments';
 
 export interface ParsedPdfDocument {
  type:'invoice'|'bank'|'contract'|'approval';
+ /** 仅为票面文字识别提示，仍需人工确认并登记查验或验签依据。 */
+ invoiceCarrier?:'unknown'|'digital'|'electronic'|'paper';
  number:string;
  /** 客商按原件付款人展示；发票的购买方即付款主体，不因本企业角色而交换买卖双方。 */
  payerName:string;
@@ -126,7 +128,8 @@ function parseInvoice(page:PdfTextPage):ParsedPdfDocument{
  if(!date)reasons.push('未可靠读取开票日期，请从原件补录');
  if(!amount)reasons.push('未可靠读取价税合计，请从原件补录');
  reasons.push('文字提取不核验印章或发票真伪，请检查原件');
- return {type:'invoice',number,...parties,supplier:parties.payerName,amount,date,sourcePages:[page.pageNumber],reviewReasons:reasons};
+ const invoiceCarrier=/全面数字化|数电发票/.test(compact(page.text))?'digital' as const:/电子发票/.test(compact(page.text))?'electronic' as const:'unknown' as const;
+ return {type:'invoice',invoiceCarrier,number,...parties,supplier:parties.payerName,amount,date,sourcePages:[page.pageNumber],reviewReasons:reasons};
 }
 function bankTitle(text:string):boolean{
  return /^(?:中国工商银行)?网上银行电子回单(?:[（(]补打[）)])?$/.test(compact(text))||/^(?:中国建设银行单位客户专用回单|客户付费回单|利息收入回单|国内支付业务付款回单)$/.test(compact(text));

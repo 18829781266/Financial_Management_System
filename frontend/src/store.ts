@@ -4,6 +4,8 @@ import type {AuthUser} from './auth';
 import { saveFiles, removeFiles, clearFiles, validateMedia, loadFile } from './fileStorage';
 import {emptyArchiveState} from './initialState';
 import {amountCents} from './money';
+import {invoiceArchiveIssue,invoiceCarrier,invoiceVerification} from './invoicePolicy';
+import {originalFingerprint} from './archiveOriginals';
 import {voucherInputIssues,inputField} from './voucherValidation';
 import {validImportSequence} from './recordOrder';
 import {evaluateRules} from './matchingEngine';
@@ -14,7 +16,7 @@ import {normalizeSupplier} from './matchUtils';
 import {receiptEntryRule,RECEIPT_RULE_ID,normalizeBankAccount,entryMoney,attachmentCoverage,clearReceiptReference,writeReceiptReference,requiredReceiptEntries} from './entryAttachments';
 import {centsToAmount,documentAllocatedCents,documentRelations,documentRemainingCents,isReferenceDocument} from './evidenceRelations';
 export {normalizeSupplier,supplierSimilarity} from './matchUtils';
-import type { ArchiveState, ArchiveBook, Voucher, SourceDocument, MatchRule, GenerateArchiveRequest, VoucherEntry, PayerGroup, EntryAllocationInput } from './types';
+import type { ArchiveState, ArchiveBook, ArchiveRecord, Voucher, SourceDocument, MatchRule, GenerateArchiveRequest, VoucherEntry, PayerGroup, EntryAllocationInput } from './types';
 
 const STORAGE_KEY = 'langchao-cloud-demo-v1';
 const localTimeFormatter=new Intl.DateTimeFormat('sv-SE',{timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false});
@@ -203,6 +205,7 @@ function prepareVouchers(drafts:VoucherDraft[]):Voucher[]{
   // 来源元数据只由 PDF 解析通道提供；JSON/CSV 字段不能自行打开宽松校验。
   if(draft.metadata&&(!draft.file||!/\.pdf$/i.test(draft.file.name)))throw new Error('PDF 提取元数据必须同时附带原始 PDF 凭证影像');
   const voucher=normalizeVoucher(draft.values,index,draft.origin,!!draft.file,draft.metadata);
+  if(state.archives.some(archive=>archive.period===voucher.period&&voucherNumberCompare(voucher.no,archive.startVoucherNo)>=0&&voucherNumberCompare(voucher.no,archive.endVoucherNo)<=0))throw new Error(`凭证 ${voucher.no} 位于已归档的锁定范围，不能补导；请保留原档案并通过后续更正流程处理`);
   const key=`${voucher.period}/${voucher.no}`;
   if(keys.has(key))throw new Error(`${draft.origin||`第 ${index+1} 行`}：凭证 ${voucher.no} 在 ${voucher.period} 已存在或本批重复`);
   keys.add(key);if(draft.file){voucher.fileId=id('file');voucher.fileName=draft.file.name;}
@@ -219,6 +222,7 @@ function prepareDocuments(drafts:DocumentDraft[]):SourceDocument[]{
   if(amount<0&&documentStatus!=='red-letter')throw new Error(`${file.name}：负数单据必须显式标识为红字单据`);
   if(!['normal','red-letter','void'].includes(documentStatus))throw new Error(`${file.name}：单据状态无效`);
   const type=fields.type??'invoice';if(!['invoice','bank','contract','approval'].includes(type))throw new Error('单据类型无效');
+  const carrier=type==='invoice'?invoiceCarrier(fields.invoiceCarrier):undefined;
   // 未读取到日期就保留空值，不把上传日期误作业务日期。
   const date=fields.date?.trim()?validateDate(fields.date):'';
   const supplier=(fields.payerName??fields.supplier??'').trim(),payeeName=fields.payeeName?.trim()??'',number=fields.number?.trim()??'';
@@ -228,7 +232,7 @@ function prepareDocuments(drafts:DocumentDraft[]):SourceDocument[]{
   if(number)keys.add(key);
   const reasons=[...(fields.reviewReasons||[])];
   if(!date)reasons.push('未提取到业务日期，请核对原件');
-  documents.push({id:id('document'),fileId:id('file'),name:file.name,type,supplier,payerName:supplier,payeeName,partyVersion:2,bankNo:fields.bankNo,receiptNo:fields.receiptNo,payerAccount:normalizeBankAccount(fields.payerAccount),payeeAccount:normalizeBankAccount(fields.payeeAccount),accountVersion:fields.accountVersion??(fields.payeeAccount?1:undefined),remarks:String(fields.remarks||''),amount,date,number,documentStatus,seal:fields.seal===true,status:'pending',matchReviewRequired:false,extractionStatus:pending?'pending':'reviewed',sourceKind:fields.sourceKind,sourcePages:fields.sourcePages?[...fields.sourcePages]:undefined,reviewReasons:pending?[...new Set(reasons)]:[]});
+  documents.push({id:id('document'),fileId:id('file'),name:file.name,type,supplier,payerName:supplier,payeeName,partyVersion:2,bankNo:fields.bankNo,receiptNo:fields.receiptNo,payerAccount:normalizeBankAccount(fields.payerAccount),payeeAccount:normalizeBankAccount(fields.payeeAccount),accountVersion:fields.accountVersion??(fields.payeeAccount?1:undefined),remarks:String(fields.remarks||''),amount,date,number,documentStatus,seal:fields.seal===true,invoiceCarrier:carrier,invoiceVerification:type==='invoice'?'pending':undefined,invoiceVerificationBasis:type==='invoice'?String(fields.invoiceVerificationBasis||'').trim():undefined,status:'pending',matchReviewRequired:false,extractionStatus:pending?'pending':'reviewed',sourceKind:fields.sourceKind,sourcePages:fields.sourcePages?[...fields.sourcePages]:undefined,reviewReasons:pending?[...new Set(reasons)]:[]});
  }
  return documents;
 }
@@ -241,6 +245,9 @@ async function commitMixedBatch(voucherDrafts:VoucherDraft[],documentDrafts:Docu
  const vouchers=prepareVouchers(voucherDrafts),documents=prepareDocuments(documentDrafts);
  for(const draft of voucherDrafts)if(draft.file)await validateMedia(draft.file);
  for(const draft of documentDrafts)await validateMedia(draft.file);
+ const fingerprintTime=new Date().toISOString();
+ for(const [index,draft] of voucherDrafts.entries())if(draft.file)Object.assign(vouchers[index]!,await originalFingerprint(draft.file),{sourceHashRecordedAt:fingerprintTime,sourceHashMode:'ingested'});
+ for(const [index,draft] of documentDrafts.entries())Object.assign(documents[index]!,await originalFingerprint(draft.file),{sourceHashRecordedAt:fingerprintTime,sourceHashMode:'ingested'});
  ensureIdle();
  let sequence=state.documents.reduce((maximum,row)=>Math.max(maximum,validImportSequence(row.importSequence)),state.vouchers.reduce((maximum,row)=>Math.max(maximum,validImportSequence(row.importSequence)),validImportSequence(state.lastImportSequence)));
  if(sequence+vouchers.length+documents.length>Number.MAX_SAFE_INTEGER)throw new Error('导入排序序号超出范围，请先备份并整理本地数据');
@@ -272,8 +279,8 @@ async function addDocumentBatch(drafts:DocumentDraft[]):Promise<SourceDocument[]
 async function addDocument(file:File,fields:Partial<SourceDocument>={}):Promise<SourceDocument>{return (await addDocumentBatch([{file,fields}]))[0]!;}
 
 const voucherNumberCompare = (left: string, right: string) => left.localeCompare(right, 'zh-CN', { numeric: true });
-function isVoucherLocked(voucher:Voucher):boolean{return state.archives.some(a=>a.period===voucher.period&&voucherNumberCompare(voucher.no,a.startVoucherNo)>=0&&voucherNumberCompare(voucher.no,a.endVoucherNo)<=0);}
-function isDocumentLocked(document:SourceDocument):boolean{return state.vouchers.some(v=>v.documentIds.includes(document.id)&&isVoucherLocked(v));}
+function isVoucherLocked(voucher:Voucher):boolean{return state.archives.some(a=>a.voucherIds?a.voucherIds.includes(voucher.id):a.period===voucher.period&&voucherNumberCompare(voucher.no,a.startVoucherNo)>=0&&voucherNumberCompare(voucher.no,a.endVoucherNo)<=0);}
+function isDocumentLocked(document:SourceDocument):boolean{return state.archives.some(archive=>archive.records?.some(record=>record.kind==='document'&&record.recordId===document.id))||state.vouchers.some(v=>v.documentIds.includes(document.id)&&isVoucherLocked(v));}
 function voucherEvidenceComplete(voucher:Voucher):boolean {
  if(voucher.noAttachmentRequired)return true;
  if(!voucher.documentIds.length)return false;
@@ -339,6 +346,7 @@ function updateVoucher(voucherId:string,values:Record<string,unknown>):void{
   if(!voucher||isVoucherLocked(voucher))throw new Error('只能编辑或复核未归档的凭证');
   const beforeMatchData=JSON.stringify(voucher);
   const wasMatched=voucher.status==='matched'||!!voucher.entryAttachments?.length;
+  const wasMissing=voucher.status==='missing',missingReason=voucher.missingReason;
   const matchReviewRequired=voucher.matchReviewRequired===true;
   const relation={status:voucher.status,documentIds:[...voucher.documentIds],ruleId:voucher.ruleId,confidence:voucher.confidence};
   const metadata:VoucherPdfMetadata|undefined=voucher.sourceKind==='pdf-text'&&voucher.entries?.length?{sourceKind:'pdf-text',sourcePages:voucher.sourcePages||[],company:voucher.company,entries:voucher.entries,reviewReasons:voucher.autoMatchBlockedReasons||[]}:undefined;
@@ -347,7 +355,8 @@ function updateVoucher(voucherId:string,values:Record<string,unknown>):void{
   if(!next.entries&&voucher.entries)next.entries=JSON.parse(JSON.stringify(voucher.entries));
   if(!metadata&&inputField(values,'company','companyName','CompanyName','单位名称')===undefined)next.company=voucher.company;
   if(metadata&&voucher.sourceAmount!==undefined&&amountCents(next.amount)!==amountCents(voucher.sourceAmount))throw new Error('PDF 凭证金额来自原始分录合计，不能直接改写；请核对原件后重新导入');
-  if(wasMatched&&next.expectedAttachments!==undefined&&next.expectedAttachments!==voucher.documentIds.length)throw new Error('附件数必须与当前关联单据一致');
+  if(voucher.status==='matched'&&next.expectedAttachments!==undefined&&next.expectedAttachments!==voucher.documentIds.length)throw new Error('附件数必须与当前关联单据一致');
+  if(wasMatched&&voucher.status!=='matched'&&next.expectedAttachments!==undefined&&next.expectedAttachments<voucher.documentIds.length)throw new Error('附件数不能少于当前已关联单据数');
   if(state.vouchers.some(v=>v.id!==voucherId&&v.no===next.no&&v.period===next.period))throw new Error('同期间凭证号已存在');
   // 未明确往来对象时仍保留待复核，不能用虚构客商换取自动匹配。
   if(metadata){
@@ -359,7 +368,9 @@ function updateVoucher(voucherId:string,values:Record<string,unknown>):void{
    // 非 PDF 旧异常数据也由本次显式保存完成字段复核；专项 PDF 阻断仅在上方独立保留。
    next.reviewStatus='reviewed';next.reviewReasons=[];
   }
-  Object.assign(voucher,next,{id:voucherId,fileId:voucher.fileId,fileName:voucher.fileName,matchReviewRequired:wasMatched?false:matchReviewRequired},wasMatched?relation:{});delete voucher.missingReason;
+  Object.assign(voucher,next,{id:voucherId,fileId:voucher.fileId,fileName:voucher.fileName,matchReviewRequired:wasMissing?true:wasMatched?false:matchReviewRequired},wasMatched||wasMissing?relation:{});
+  // 普通字段复核不代表已补齐附件；只有明确恢复或人工关联才能解除缺失标记。
+  if(wasMissing)voucher.missingReason=missingReason;else delete voucher.missingReason;
   if(beforeMatchData!==JSON.stringify(voucher))bumpMatchDataRevision();
   rebuildPayerGroups();
   // 保存客商是显式复核动作；仅限同期、规范化名称完全一致的现有企业组。
@@ -378,11 +389,19 @@ function updateDocument(documentId:string,fields:DocumentDraft['fields']):void{
   if((!supplier&&fields.type!=='bank')||!number||amount===0&&!['contract','approval'].includes(fields.type||'')||amount<0&&documentStatus!=='red-letter')throw new Error('请补齐客商、单据编号、金额和日期；负数单据须标识红字');
   if(!fields.type||!['invoice','bank','contract','approval'].includes(fields.type))throw new Error('单据类型无效');
   if(state.documents.some(d=>d.id!==documentId&&d.type===fields.type&&d.number===number&&d.date.slice(0,7)===date.slice(0,7)))throw new Error('同期间、同类型单据编号已存在');
-  Object.assign(doc,{supplier,payerName:supplier,payeeName,partyVersion:2,payerAccount,payeeAccount,accountVersion:1,remarks:fields.remarks===undefined?doc.remarks:String(fields.remarks),number,amount,date,type:fields.type,documentStatus,seal:fields.seal===true,extractionStatus:'reviewed',reviewReasons:[]});
+  const carrier=fields.type==='invoice'?invoiceCarrier(fields.invoiceCarrier??doc.invoiceCarrier):undefined;
+  const contentChanged=number!==doc.number||amount!==doc.amount||date!==doc.date||supplier!==(doc.payerName??doc.supplier)||payeeName!==(doc.payeeName??'')||fields.type!==doc.type;
+  const verification=fields.type==='invoice'?(doc.invoiceVerification==='passed'&&contentChanged?'pending':invoiceVerification(fields.invoiceVerification??(carrier===doc.invoiceCarrier?doc.invoiceVerification:'pending'))):undefined;
+  const basis=fields.type==='invoice'?String(fields.invoiceVerificationBasis??doc.invoiceVerificationBasis??'').trim():undefined;
+  if(verification&&verification!=='pending'&&!basis)throw new Error('请填写人工核验依据，包括查验、验签或原件核对的结果与来源');
+  const changedVerification=carrier!==doc.invoiceCarrier||verification!==doc.invoiceVerification||basis!==doc.invoiceVerificationBasis;
+  const checkedAt=verification&&verification!=='pending'?(changedVerification?localTime():doc.invoiceCheckedAt||localTime()):undefined;
+  const checkedBy=verification&&verification!=='pending'?(changedVerification?authState.user?.username||'本地操作员':doc.invoiceCheckedBy||authState.user?.username||'本地操作员'):undefined;
+  Object.assign(doc,{supplier,payerName:supplier,payeeName,partyVersion:2,payerAccount,payeeAccount,accountVersion:1,remarks:fields.remarks===undefined?doc.remarks:String(fields.remarks),number,amount,date,type:fields.type,documentStatus,seal:fields.seal===true,invoiceCarrier:carrier,invoiceVerification:verification,invoiceVerificationBasis:basis,invoiceCheckedAt:checkedAt,invoiceCheckedBy:checkedBy,extractionStatus:'reviewed',reviewReasons:[]});
   if(doc.matchedVoucherId!==undefined&&doc.matchedEntryIndex!==undefined){const voucher=state.vouchers.find(v=>v.id===doc.matchedVoucherId);if(voucher)writeReceiptReference(doc,voucher,doc.matchedEntryIndex);}
   if(beforeMatchData!==JSON.stringify(doc))bumpMatchDataRevision();
   rebuildPayerGroups();
-  log('复核单据',`已补录并复核 ${doc.name}`);
+  log('复核单据',`已补录并复核 ${doc.name}${checkedAt?`；人工核验${verification==='passed'?'通过':'未通过'}，依据：${basis}`:''}`);
 }
 
 function unmatchVoucher(voucherId:string,reason:string):void{
@@ -399,6 +418,7 @@ function unmatchVoucher(voucherId:string,reason:string):void{
 function confirmSeal(documentId:string):void{
   ensureIdle();const d=state.documents.find(d=>d.id===documentId);
   if(!d||d.type!=='invoice'||isDocumentLocked(d))throw new Error('只能核验未归档发票的印章');
+  if(d.invoiceCarrier!=='paper')throw new Error('请先在核验发票中明确纸质载体；电子发票按查验或验签依据核验，不适用印章快捷确认');
   d.seal=true;log('核验发票印章',`人工确认 ${d.name} 的发票印章`);
 }
 
@@ -589,7 +609,8 @@ async function autoMatch(period?: string): Promise<{ matched: number; remaining:
   await new Promise<void>(resolve=>setTimeout(resolve,150));
   const lockedVouchers=new Set(state.vouchers.filter(isVoucherLocked).map(voucher=>voucher.id));
   const lockedDocuments=new Set(state.vouchers.filter(voucher=>lockedVouchers.has(voucher.id)).flatMap(voucher=>voucher.documentIds));
-  const targets=state.vouchers.filter(v=>(!period||v.period===period)&&!lockedVouchers.has(v.id)),targetIds=new Set(targets.map(v=>v.id));
+  // 已标记缺失的凭证不参与重算；仍保留在下方 context 中核算已有分摊占用。
+  const targets=state.vouchers.filter(v=>v.status!=='missing'&&(!period||v.period===period)&&!lockedVouchers.has(v.id)),targetIds=new Set(targets.map(v=>v.id));
   const documents=state.documents.filter(doc=>!lockedDocuments.has(doc.id));
   const alreadyAssociated=new Set(targets.filter(v=>collectionStatus(v)==='matched').map(v=>v.id));
   const beforeDocumentIds=new Set(targets.flatMap(v=>v.documentIds));
@@ -722,14 +743,54 @@ function updateRule(ruleId: string, patch: Partial<MatchRule>): void {
   log('更新匹配规则', `${rule.id} ${rule.name}：${rule.enabled ? '启用' : '停用'}，优先级 ${rule.priority}，策略 ${rule.matchType}，阈值 ${rule.threshold}%，容差 ${rule.tolerance.toFixed(2)} 元`);
 }
 
-function generateArchive(request: GenerateArchiveRequest): ArchiveBook {
-  ensureIdle();
+function selectedArchiveVouchers(request:GenerateArchiveRequest):Voucher[]{
   if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(request.period)) throw new Error('请选择正确的会计期间');
   if (!request.startVoucherNo.trim() || !request.endVoucherNo.trim() || voucherNumberCompare(request.startVoucherNo, request.endVoucherNo) > 0) throw new Error('凭证号范围无效');
   const vouchers = state.vouchers.filter(v => v.period === request.period && voucherNumberCompare(v.no, request.startVoucherNo) >= 0 && voucherNumberCompare(v.no, request.endVoucherNo) <= 0);
   if (!vouchers.length) throw new Error('所选期间和范围内没有凭证');
   if (!vouchers.some(v => v.no === request.startVoucherNo) || !vouchers.some(v => v.no === request.endVoucherNo)) throw new Error('起止凭证号必须存在');
   if (state.archives.some(a => a.period === request.period && voucherNumberCompare(a.startVoucherNo, request.endVoucherNo) <= 0 && voucherNumberCompare(a.endVoucherNo, request.startVoucherNo) >= 0)) throw new Error('该范围与已有只读档案重叠，请选择未归档凭证');
+  return vouchers;
+}
+function archiveOriginalRecords(vouchers:Voucher[]):ArchiveRecord[]{
+ return vouchers.flatMap(voucher=>[
+  {kind:'voucher' as const,recordId:voucher.id,no:voucher.no,date:voucher.date,supplier:voucher.supplier,amount:voucher.amount,summary:voucher.summary,fileId:voucher.fileId,fileName:voucher.fileName,sourceHash:voucher.sourceHash,sourceSize:voucher.sourceSize},
+  ...voucher.documentIds.map(documentId=>{
+   const document=state.documents.find(candidate=>candidate.id===documentId);
+   if(!document)throw new Error(`${voucher.no} 附件缺失`);
+   return {kind:'document' as const,recordId:document.id,no:document.number,date:document.date,supplier:document.payerName??document.supplier,amount:document.amount,summary:document.name,fileId:document.fileId,fileName:document.name,sourceHash:document.sourceHash,sourceSize:document.sourceSize};
+  }),
+ ]);
+}
+/** 真实读取并核对原件，失败不创建档案或留下锁定；历史无摘要原件仅登记当前校验基线，不追认历史未篡改。 */
+async function validateArchiveOriginals(request:GenerateArchiveRequest):Promise<void>{
+ ensureIdle();
+ const vouchers=selectedArchiveVouchers(request);
+ const records=archiveOriginalRecords(vouchers);
+ const unique=new Map(records.map(record=>[`${record.kind}:${record.recordId}`,record]));
+ const checkedFiles=new Map<string,{sourceHash:string;sourceSize:number}>();
+ const legacy:{record:ArchiveRecord;fingerprint:{sourceHash:string;sourceSize:number}}[]=[];
+ for(const record of unique.values()){
+  if(!record.fileId)throw new Error(`${record.no} 缺少上传原件，结构化整理页不能替代正式归档原件`);
+  let fingerprint=checkedFiles.get(record.fileId);
+  if(!fingerprint){
+   const source=await loadFile(record.fileId);
+   if(!source)throw new Error(`${record.fileName||record.no} 原始文件已丢失，不能生成正式档案`);
+   fingerprint=await originalFingerprint(source);checkedFiles.set(record.fileId,fingerprint);
+  }
+  if(record.sourceHash&&record.sourceHash!==fingerprint.sourceHash||record.sourceSize!==undefined&&record.sourceSize!==fingerprint.sourceSize)throw new Error(`${record.fileName||record.no} 原件摘要或大小与入库记录不一致，请停止归档并核查`);
+  if(!record.sourceHash)legacy.push({record,fingerprint});
+ }
+ // 只有全部原件都存在且已核验后，才登记历史原件的当前基线，避免失败批次写入半套指纹。
+ for(const {record,fingerprint} of legacy){
+  const item=record.kind==='voucher'?state.vouchers.find(candidate=>candidate.id===record.recordId):state.documents.find(candidate=>candidate.id===record.recordId);
+  if(item)Object.assign(item,fingerprint,{sourceHashRecordedAt:localTime(),sourceHashMode:'legacy-registered'});
+ }
+ if(legacy.length)log('登记历史原件校验基线',`本次确认 ${legacy.length} 份原件当前SHA-256；不代表已验证登记前的历史完整性`);
+}
+function generateArchive(request: GenerateArchiveRequest): ArchiveBook {
+  ensureIdle();
+  const vouchers=selectedArchiveVouchers(request);
   for (const voucher of vouchers) {
     // 自动匹配已确认证据关系时，字段待复核提示不再拦截正式档案；其余财务硬校验继续执行。
     const automaticMatch=voucher.status==='matched'&&!!voucher.ruleId&&voucher.ruleId!=='MANUAL';
@@ -740,12 +801,14 @@ function generateArchive(request: GenerateArchiveRequest): ArchiveBook {
     if(voucher.noAttachmentRequired){
       if(!voucher.attachmentExemptionReason?.trim())throw new Error(`${voucher.no} 缺少无外部附件的人工豁免依据`);
       if(docs.length)throw new Error(`${voucher.no} 附件豁免与已关联单据不能同时存在`);
+      if(!voucher.fileId)throw new Error(`${voucher.no} 缺少上传原件，附件豁免不豁免记账凭证原件`);
       continue;
     }
-    if(docs.some(doc=>doc?.extractionStatus==='pending'))throw new Error(`${voucher.no} 存在尚待复核的附件`);
+    const pendingDocuments=docs.filter((doc):doc is SourceDocument=>!!doc&&doc.extractionStatus==='pending');
+    if(pendingDocuments.length)throw new Error(`${voucher.no} 存在尚待复核的附件：${pendingDocuments.map(doc=>doc.name).join('、')}。请在生成窗口点击“复核附件”并保存确认`);
     if (!docs.length || docs.some(doc => !doc)) throw new Error(`${voucher.no} 附件缺失`);
     if (voucher.expectedAttachments !== undefined && docs.length !== voucher.expectedAttachments) throw new Error(`${voucher.no} 附件数量不符`);
-    if (docs.some(doc => doc!.type === 'invoice' && !doc!.seal)) throw new Error(`${voucher.no} 存在未确认发票章的单据`);
+    for(const doc of docs){if(doc!.documentStatus==='void')throw new Error(`${voucher.no} 存在已作废单据`);const issue=invoiceArchiveIssue(doc!);if(issue)throw new Error(`${voucher.no}：${issue}`);}
     if(voucher.entryAttachments?.length){
       if(!attachmentCoverage(voucher,voucher.entryAttachments,state.documents)||voucher.attachmentReviewRequired)throw new Error(`${voucher.no} 仍有分录附件需要复核`);
       if(voucher.entryAttachments.some(link=>!voucher.documentIds.includes(link.documentId)))throw new Error(`${voucher.no} 分录附件关系不完整`);
@@ -761,9 +824,10 @@ function generateArchive(request: GenerateArchiveRequest): ArchiveBook {
       const sum = docs.filter(doc=>!isReferenceDocument(doc!)).reduce((total, doc) => total + amountCents(doc!.amount), 0);
       if (Math.abs(sum - amountCents(voucher.amount)) > 5) throw new Error(`${voucher.no} 附件金额不一致`);
     }
+    if(!voucher.fileId||docs.some(doc=>!doc!.fileId))throw new Error(`${voucher.no} 缺少上传原件，结构化整理页不能替代正式归档原件`);
   }
   const [year, month] = request.period.split('-');
-  const archive: ArchiveBook = { id: id('archive'), title: `${year}年${month}月会计凭证`, period: request.period, startVoucherNo: request.startVoucherNo, endVoucherNo: request.endVoucherNo, voucherCount: vouchers.length, pageCount: vouchers.length + vouchers.reduce((total, v) => total + v.documentIds.length, 0) + 2, amount: vouchers.reduce((total, v) => total + amountCents(v.amount), 0) / 100, createdAt: localTime(), status: 'locked' };
+  const archive: ArchiveBook = { id: id('archive'), title: `${year}年${month}月会计凭证`, period: request.period, startVoucherNo: request.startVoucherNo, endVoucherNo: request.endVoucherNo, voucherCount: vouchers.length, pageCount: vouchers.length + vouchers.reduce((total, v) => total + v.documentIds.length, 0) + 2, amount: vouchers.reduce((total, v) => total + amountCents(v.amount), 0) / 100, createdAt: localTime(), status: 'locked',voucherIds:vouchers.map(voucher=>voucher.id),records:archiveOriginalRecords(vouchers) };
   state.archives.unshift(archive);
   log('生成档案册', `本地演示档案 ${archive.title}，${archive.startVoucherNo} 至 ${archive.endVoucherNo}；PDF 与 SHA-256 由实际导出步骤生成`);
   // 返回响应式对象，使后续 PDF 文件ID/哈希写入也能触发持久化。
@@ -796,5 +860,5 @@ async function resetData():Promise<void>{
 }
 
 export function useArchiveStore() {
-  return { state, storageError, recordOperation:(action:string,detail:string)=>{log(action,detail);}, refreshDocumentParties:()=>write(async()=>{const count=await refreshDocumentParties();await refreshDocumentAccounts();return count;}), reconcileEntry:(id:string,index:number,ids:string[],reason:string)=>syncWrite(()=>reconcileEntry(id,index,ids,reason)), reconcileEntryAllocations:(id:string,index:number,allocations:EntryAllocationInput[],reason:string)=>syncWrite(()=>reconcileEntryAllocations(id,index,allocations,reason)), confirmAttachmentExemption:(id:string,reason:string)=>syncWrite(()=>confirmAttachmentExemption(id,reason)), importMixedBatch:(vouchers:VoucherDraft[],documents:DocumentDraft[])=>write(()=>importMixedBatch(vouchers,documents)), importVouchers:(file:File)=>write(()=>importVouchers(file)), importVoucherBatch:(drafts:VoucherDraft[])=>write(()=>importVoucherBatch(drafts)), addDocument:(file:File,fields:Partial<SourceDocument>={})=>write(()=>addDocument(file,fields)), addDocumentBatch:(drafts:DocumentDraft[])=>write(()=>addDocumentBatch(drafts)), deleteVouchers:(ids:string[])=>write(()=>deleteVouchers(ids)), deleteDocuments:(ids:string[])=>write(()=>deleteDocuments(ids)), updateVoucher:(id:string,values:Record<string,unknown>)=>syncWrite(()=>updateVoucher(id,values)), updateDocument:(id:string,fields:DocumentDraft['fields'])=>syncWrite(()=>updateDocument(id,fields)), restoreMissing:(id:string)=>syncWrite(()=>restoreMissing(id)), isVoucherLocked, isDocumentLocked, unmatchVoucher:(id:string,reason:string)=>syncWrite(()=>unmatchVoucher(id,reason)), confirmSeal:(id:string)=>syncWrite(()=>confirmSeal(id)), autoMatch, manualMatch:(id:string,ids:string[],reason:string)=>syncWrite(()=>manualMatch(id,ids,reason)), markMissing:(id:string,reason:string)=>syncWrite(()=>markMissing(id,reason)), updateRule:(id:string,patch:Partial<MatchRule>)=>syncWrite(()=>updateRule(id,patch)), generateArchive:(request:GenerateArchiveRequest)=>syncWrite(()=>generateArchive(request)), resetData:()=>write(()=>resetData()) };
+  return { state, storageError, recordOperation:(action:string,detail:string)=>{log(action,detail);}, refreshDocumentParties:()=>write(async()=>{const count=await refreshDocumentParties();await refreshDocumentAccounts();return count;}), reconcileEntry:(id:string,index:number,ids:string[],reason:string)=>syncWrite(()=>reconcileEntry(id,index,ids,reason)), reconcileEntryAllocations:(id:string,index:number,allocations:EntryAllocationInput[],reason:string)=>syncWrite(()=>reconcileEntryAllocations(id,index,allocations,reason)), confirmAttachmentExemption:(id:string,reason:string)=>syncWrite(()=>confirmAttachmentExemption(id,reason)), importMixedBatch:(vouchers:VoucherDraft[],documents:DocumentDraft[])=>write(()=>importMixedBatch(vouchers,documents)), importVouchers:(file:File)=>write(()=>importVouchers(file)), importVoucherBatch:(drafts:VoucherDraft[])=>write(()=>importVoucherBatch(drafts)), addDocument:(file:File,fields:Partial<SourceDocument>={})=>write(()=>addDocument(file,fields)), addDocumentBatch:(drafts:DocumentDraft[])=>write(()=>addDocumentBatch(drafts)), deleteVouchers:(ids:string[])=>write(()=>deleteVouchers(ids)), deleteDocuments:(ids:string[])=>write(()=>deleteDocuments(ids)), updateVoucher:(id:string,values:Record<string,unknown>)=>syncWrite(()=>updateVoucher(id,values)), updateDocument:(id:string,fields:DocumentDraft['fields'])=>syncWrite(()=>updateDocument(id,fields)), restoreMissing:(id:string)=>syncWrite(()=>restoreMissing(id)), isVoucherLocked, isDocumentLocked, unmatchVoucher:(id:string,reason:string)=>syncWrite(()=>unmatchVoucher(id,reason)), confirmSeal:(id:string)=>syncWrite(()=>confirmSeal(id)), autoMatch, manualMatch:(id:string,ids:string[],reason:string)=>syncWrite(()=>manualMatch(id,ids,reason)), markMissing:(id:string,reason:string)=>syncWrite(()=>markMissing(id,reason)), updateRule:(id:string,patch:Partial<MatchRule>)=>syncWrite(()=>updateRule(id,patch)), validateArchiveOriginals:(request:GenerateArchiveRequest)=>write(()=>validateArchiveOriginals(request)), generateArchive:(request:GenerateArchiveRequest)=>syncWrite(()=>generateArchive(request)), resetData:()=>write(()=>resetData()) };
 }

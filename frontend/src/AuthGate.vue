@@ -18,5 +18,7 @@ onBeforeUnmount(()=>{clearInterval(sessionTimer);window.removeEventListener('foc
 </template>
 
 <style scoped>
-.auth-loading{min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;background:radial-gradient(ellipse at 50% 35%,#e7f1ff,#f7f9fc 65%);color:#7387a1;font-size:14px}.auth-loading strong{font-size:27px;color:#24426a;letter-spacing:2px}.auth-loading img{filter:drop-shadow(0 6px 12px #2669d52a)}
+.auth-loading{min-height:100svh;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:17px;background:var(--ws-canvas);color:var(--ws-secondary);font-size:14px}
+.auth-loading strong{font-size:27px;font-weight:650;color:var(--ws-ink);letter-spacing:1px}
+.auth-loading img{filter:none}
 </style>

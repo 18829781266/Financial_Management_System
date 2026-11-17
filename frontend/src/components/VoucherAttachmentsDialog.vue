@@ -3,6 +3,8 @@ import {computed,ref,watch} from 'vue';
 import {ElMessage} from 'element-plus';
 import {Paperclip,FileText,Link2,ShieldCheck} from 'lucide-vue-next';
 import {useArchiveStore} from '../store';
+import {completeVoucherReview} from '../reviewCompletion';
+import {collectionStatus} from '../matchWorkflow';
 import VoucherReviewFields from './VoucherReviewFields.vue';
 import {accountInSubject,entryAccount,entryMoney,evaluateEntryAttachments,RECEIPT_RULE_ID,requiredReceiptEntries} from '../entryAttachments';
 import {amountCents} from '../money';
@@ -10,7 +12,7 @@ import {centsToAmount,documentRemainingCents,isReferenceDocument} from '../evide
 import type {EntryAllocationInput,EntryAttachment,SourceDocument,Voucher} from '../types';
 
 const props=defineProps<{modelValue:boolean;voucher?:Voucher;documents:SourceDocument[];reviewFields?:boolean}>();
-const emit=defineEmits<{'update:modelValue':[boolean];view:[record:SourceDocument];saved:[]}>();
+const emit=defineEmits<{'update:modelValue':[boolean];view:[record:SourceDocument];saved:[];completed:[voucher:Voucher]}>();
 const store=useArchiveStore();
 const money=(value:string|number)=>Number(value).toLocaleString('zh-CN',{minimumFractionDigits:2,maximumFractionDigits:2});
 const locked=computed(()=>!props.voucher||store.isVoucherLocked(props.voucher));
@@ -59,10 +61,24 @@ const rows=computed(()=>(props.voucher?.entries||[]).map((entry,index)=>{
 const required=computed(()=>new Set(props.voucher?requiredReceiptEntries(props.voucher):[]));
 const reviewing=ref(false),reviewIndex=ref(0),selected=ref<string[]>([]),amounts=ref<Record<string,string>>({}),reason=ref(''),error=ref(''),candidateQuery=ref('');
 const exemptionOpen=ref(false),exemptionReason=ref('');
-const voucherFields=ref<{save:()=>boolean}>();
-function saveFields(){
- const voucher=props.voucher;if(!voucherFields.value?.save()||!voucher)return;
- if(!voucher.documentIds.length&&!voucher.noAttachmentRequired){error.value='';exemptionReason.value='';exemptionOpen.value=true;}
+const completing=ref(false);
+const voucherFields=ref<{save:(options?:{emitSaved?:boolean;notify?:boolean})=>boolean}>();
+watch([()=>props.modelValue,()=>props.voucher?.id],([open])=>{if(open){error.value='';exemptionOpen.value=false;exemptionReason.value='';}});
+function finished(voucher:Voucher,message:string){
+ completing.value=false;emit('saved');emit('completed',voucher);close();ElMessage.success(message);
+}
+async function saveFields(){
+ const voucher=props.voucher;if(completing.value||!voucher||!voucherFields.value?.save({emitSaved:false,notify:false}))return;
+ completing.value=true;error.value='';
+ try{
+  const result=await completeVoucherReview(store,voucher.id);
+  if(result.voucher.status!=='missing'&&!result.voucher.documentIds.length&&!result.voucher.noAttachmentRequired){
+   exemptionReason.value='';exemptionOpen.value=true;return;
+  }
+  if(result.completed){finished(result.voucher,'复核已完成，凭证已匹配归档并同步到电子档案');return;}
+  error.value=result.reason;
+ }catch(e){error.value=e instanceof Error?e.message:'复核未完成，请核对后重试';}
+ finally{completing.value=false;}
 }
 const reviewRow=computed(()=>rows.value[reviewIndex.value]);
 const reviewMoney=computed(()=>reviewRow.value?entryMoney(reviewRow.value):undefined);
@@ -101,6 +117,7 @@ watch(selected,ids=>{
 });
 function filterCandidates(query:string){candidateQuery.value=query;}
 function review(index:number){
+ if(completing.value)return;
  reviewIndex.value=index;candidateQuery.value='';
  const suggested=automaticLinks.value.filter(link=>link.entryIndex===index);
  selected.value=[...new Set([...oldLinks.value,...suggested].map(link=>link.documentId))];amounts.value={};
@@ -113,28 +130,36 @@ function review(index:number){
  reason.value=props.voucher?.entryReviewNotes?.[String(index)]??oldLinks.value.find(link=>link.ruleId==='MANUAL')?.reason??'';error.value='';reviewing.value=true;
 }
 function save(){
- if(!props.voucher)return;
+ if(!props.voucher||completing.value)return;
+ if(props.reviewFields&&!voucherFields.value?.save({emitSaved:false,notify:false})){error.value='请先补齐并核对凭证字段，再保存本条分录关联';return;}
  const allocations:EntryAllocationInput[]=selectedRows.value.map(row=>({documentId:row.doc.id,relationType:row.reference?'reference':'settlement',...(row.reference?{}:{allocatedAmount:amounts.value[row.doc.id]||'0'})}));
- try{store.reconcileEntryAllocations(props.voucher.id,reviewIndex.value,allocations,reason.value);reviewing.value=false;emit('saved');close();ElMessage.success('人工复核已留痕，分录附件与分摊金额已更新');}
+ try{
+  store.reconcileEntryAllocations(props.voucher.id,reviewIndex.value,allocations,reason.value);reviewing.value=false;
+  if(collectionStatus(props.voucher)==='matched'){finished(props.voucher,'人工复核已完成，凭证已匹配归档并同步到电子档案');return;}
+  emit('saved');error.value=props.voucher.lastMatchReason||'本条分录已保存，其余分录仍需复核，请继续完成附件关联';
+  ElMessage.info('本条分录已保存，请继续复核其余分录');
+ }
  catch(e){error.value=e instanceof Error?e.message:'复核未完成';}
 }
 function exempt(){
- if(!props.voucher)return;
- try{store.confirmAttachmentExemption(props.voucher.id,exemptionReason.value);exemptionOpen.value=false;exemptionReason.value='';emit('saved');close();ElMessage.success('无外部附件依据已留痕，已返回列表');}
+ if(!props.voucher||completing.value)return;
+ if(props.reviewFields&&!voucherFields.value?.save({emitSaved:false,notify:false})){error.value='请先补齐并核对凭证字段';return;}
+ try{store.confirmAttachmentExemption(props.voucher.id,exemptionReason.value);exemptionOpen.value=false;exemptionReason.value='';finished(props.voucher,'无外部附件依据已留痕，凭证已匹配归档并同步到电子档案');}
  catch(e){error.value=e instanceof Error?e.message:'操作未完成';}
 }
-function close(){reviewing.value=false;exemptionOpen.value=false;error.value='';emit('update:modelValue',false);}
+function close(){if(completing.value)return;reviewing.value=false;exemptionOpen.value=false;error.value='';emit('update:modelValue',false);}
 </script>
 
 <template>
- <window-dialog :model-value="modelValue" :title="(reviewFields?'凭证复核与手工匹配 · ':'凭证分录与原始单据复核 · ')+(voucher?.no||'')" width="min(1180px, calc(100vw - 32px))" class="entry-attachments-dialog" @close="close" destroy-on-close>
+ <window-dialog :model-value="modelValue" :title="(reviewFields?'编辑与复核凭证 · ':'凭证分录与原始单据复核 · ')+(voucher?.no||'')" width="min(1180px, calc(100vw - 32px))" class="entry-attachments-dialog" :close-on-click-modal="false" :close-on-press-escape="!completing" :show-close="!completing" @close="close" destroy-on-close>
   <div class="review-overview">
    <div><span class="review-kicker">当前凭证</span><strong>{{voucher?.no}}</strong><small>{{voucher?.summary}} · {{voucher?.supplier||'客商待复核'}}</small></div>
    <div class="review-total"><span>凭证金额</span><strong>¥ {{money(voucher?.amount||0)}}</strong></div>
    <div class="review-total"><span>已关联原件</span><strong>{{voucher?.documentIds.length||0}} <small>份</small></strong></div>
   </div>
   <el-alert v-if="voucher?.lastMatchReason" :title="voucher.lastMatchReason" :type="voucher.status==='matched'?'success':'warning'" :closable="false" show-icon/>
-  <VoucherReviewFields v-if="reviewFields&&voucher&&!locked" ref="voucherFields" :voucher="voucher" :show-save-action="false" @saved="emit('saved')"/>
+  <el-alert v-if="error&&!reviewing&&!exemptionOpen" :title="error" type="warning" :closable="false" show-icon class="review-completion-message"/>
+  <VoucherReviewFields v-if="reviewFields&&voucher&&!locked" ref="voucherFields" :voucher="voucher" :show-save-action="false" :disabled="completing" @saved="emit('saved')"/>
   <div v-if="reviewFields" class="attachment-section-heading"><span>2</span><div><h3>复核分录与原始单据</h3><p>字段复核与附件匹配在同一页面完成，确认留痕后返回列表。</p></div></div>
   <div class="review-rule"><ShieldCheck :size="16"/><span>回单按每条分录核对分摊合计；合同、审批单可共享引用且不参与金额凑算。候选不唯一时必须人工确认。</span></div>
   <el-table :data="rows" :max-height="reviewFields?'42vh':'55vh'" row-key="index" border empty-text="未读取到逐行分录，请补录分录或核对原始凭证后重新导入">
@@ -146,7 +171,7 @@ function close(){reviewing.value=false;exemptionOpen.value=false;error.value='';
     <div class="entry-documents">
      <div v-for="doc in row.documents" :key="`${doc.id}-${doc.link.allocatedAmount||'full'}`" class="entry-document-row">
       <button class="entry-document text-link" @click="emit('view',doc)"><Paperclip :size="15"/><span>{{doc.name}}</span></button>
-      <small v-if="doc.suggested==='bank'" class="auto-match-chip"><ShieldCheck :size="11"/>唯一金额候选 · 金额、账号及日期一致</small>
+      <small v-if="doc.suggested==='bank'" class="auto-match-chip"><ShieldCheck :size="11"/>唯一关联候选 · 客商、金额、账号及日期一致</small>
       <small v-else-if="doc.suggested==='amount'" class="auto-match-chip"><ShieldCheck :size="11"/>金额一致 · 分录关系待复核</small>
       <small v-else-if="doc.link.relationType==='reference'" class="shared-chip"><Link2 :size="11"/>共享引用 · 不计金额</small>
       <small v-else>本次分摊 <b>¥ {{money(doc.link.allocatedAmount??doc.amount)}}</b><template v-if="doc.remainingAmount!==undefined"> · 单据剩余 ¥ {{money(doc.remainingAmount)}}</template></small>
@@ -166,7 +191,7 @@ function close(){reviewing.value=false;exemptionOpen.value=false;error.value='';
    </div>
   </section>
   <div v-if="voucher?.noAttachmentRequired" class="exemption-receipt"><ShieldCheck :size="17"/><span>已确认无外部附件：{{voucher.attachmentExemptionReason}}</span></div>
-  <template v-if="!locked" #footer><div class="review-dialog-footer"><span class="footer-spacer"/><button class="btn" @click="close">取消</button><button v-if="reviewFields" class="btn primary" @click="saveFields">保存并复核字段</button></div></template>
+  <template v-if="!locked" #footer><div class="review-dialog-footer"><span class="footer-spacer"/><button class="btn" :disabled="completing" @click="close">取消</button><button v-if="reviewFields" class="btn primary" :disabled="completing" @click="saveFields">{{completing?'正在复核…':'保存并复核'}}</button></div></template>
  </window-dialog>
 
  <window-dialog v-model="reviewing" class="entry-review-dialog" :title="'人工复核第'+(reviewIndex+1)+'条分录'" width="min(900px, calc(100vw - 32px))" append-to-body destroy-on-close>

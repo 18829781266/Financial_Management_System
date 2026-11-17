@@ -24,7 +24,7 @@ function wholeVoucher(no='流程-1',amount='100.00',supplier=payer,date='2026-06
  return {file:file(),values:values(no,amount,supplier,date)};
 }
 function pdfDocument(number='FLOW-INV-1',options:Partial<SourceDocument>&{amount?:number}={}):DocumentDraft{
- const fields:DocumentDraft['fields']={type:'invoice',payerName:payer,payeeName:'合成收款企业有限公司',supplier:payer,date:'2026-06-01',amount:'100.00',number,sourceKind:'pdf-text',sourcePages:[1],extractionStatus:'pending',seal:false,reviewReasons:['请对照原件核验字段'],...options};
+ const fields:DocumentDraft['fields']={type:'invoice',invoiceCarrier:'paper',payerName:payer,payeeName:'合成收款企业有限公司',supplier:payer,date:'2026-06-01',amount:'100.00',number,sourceKind:'pdf-text',sourcePages:[1],extractionStatus:'pending',seal:false,reviewReasons:['请对照原件核验字段'],...options};
  return {file:file(`${number}.pdf`),fields};
 }
 function enableRules(ids:string[]){for(const rule of store.state.rules)store.updateRule(rule.id,{enabled:ids.includes(rule.id)});}

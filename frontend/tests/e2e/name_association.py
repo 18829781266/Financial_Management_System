@@ -52,7 +52,7 @@ async def main():
    await check('银行单据按原值汇总且不冒充凭证100元',await page.locator('.type-totals strong').inner_text()=='¥ 1,490.00')
    await page.get_by_role('button',name='加载原件预览',exact=True).click();await page.wait_for_function("document.querySelectorAll('.original-document-page').length===3 && document.querySelector('.original-document-page[data-rendered=true]')")
    await check('企业原始凭证和两份回单直接翻阅3页',await page.locator('.draft-preview .original-document-canvas').count()==3)
-   await check('仅名称关联提供核对附件入口',await page.get_by_role('button',name='核对凭证附件',exact=True).count()==1 and await page.get_by_role('button',name='生成正式档案册',exact=True).count()==0)
+   await check('名称关联保留核对附件与正式生成入口，生成时仍校验完整性',await page.get_by_role('button',name='核对凭证附件',exact=True).count()==1 and await page.get_by_role('button',name='生成正式档案册',exact=True).count()==1)
    await nav('数据采集');await page.get_by_role('button',name='名称-1',exact=True).click();dialog=page.locator('.el-dialog:visible');await check('关联穿透展示R08名称依据而非尚未建立关联','R08' in await dialog.inner_text() and '企业名称关联：浏览器合成核算单位有限公司' in await dialog.inner_text());await dialog.get_by_role('button',name='关闭',exact=True).click()
    previous=s['lastMatchRun']['id'];await role('付款人名称（默认客商）');await nav('智能匹配');await check('保存名称字段不自行运行',(await state())['lastMatchRun']['id']==previous);await run();await check('付款人配置只关联付款侧',(await state())['nameAssociations'][0]['documentIds']==['payer-original'])
    await role('收款人名称');await run();await check('收款人配置只关联收款侧',(await state())['nameAssociations'][0]['documentIds']==['payee-original'])

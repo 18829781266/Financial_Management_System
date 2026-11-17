@@ -15,3 +15,9 @@ export function collectionStatus(record:Voucher|SourceDocument):CollectionStatus
 export function collectionStatusLabel(record:Voucher|SourceDocument):string {
  return {pending:'待匹配',matched:'已匹配归档',review:'请复核'}[collectionStatus(record)];
 }
+
+/** 凭证列表沿用采集状态判断，避免名称关联成功后仍显示“待匹配”。 */
+export function voucherStatusLabel(voucher:Voucher):string {
+ if(voucher.status==='missing')return '附件缺失';
+ return {pending:'待匹配',matched:'已匹配归档',review:'待人工复核'}[collectionStatus(voucher)];
+}
